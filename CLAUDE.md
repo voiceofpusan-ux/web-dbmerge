@@ -1,42 +1,60 @@
-# db통합다중엑셀 프로젝트
+# web-dbmerge 프로젝트
 
 ## 프로젝트 개요
-다수의 엑셀/CSV 파일을 통합하고, 전화번호를 정규화·중복 제거하여 정제된 연락처 DB를 출력하는 tkinter GUI 도구.
+다수의 엑셀/CSV 파일을 브라우저에서 업로드하여 전화번호를 정규화·중복 제거하고,
+정제된 연락처 DB를 Supabase에 저장하거나 xlsx 파일로 다운로드하는 Next.js 웹 앱.
+
+## 기술 스택
+- **프레임워크**: Next.js 16 (App Router, TypeScript)
+- **스타일**: Tailwind CSS
+- **DB**: Supabase (PostgreSQL + RLS)
+- **엑셀 파싱/생성**: SheetJS (xlsx)
+- **배포**: Vercel (GitHub 자동 배포)
 
 ## 모듈 구조
 ```
-dbmerge.py              # 진입점, App(tk.Tk) 메인 윈도우, 잔여건수 표시
-core/
-  loader.py             # 엑셀/CSV 로드, 컬럼 자동 추론 (성+이름 병합 포함)
-  normalizer.py         # 전화번호 정규화 및 구번호→010 변환
-  deduplicator.py       # 중복 검사 및 비고작업 컬럼 생성
-  exporter.py           # xlsx 저장 (openpyxl)
-  license.py            # Firestore 라이선스 관리 (등록/조회/건수차감)
-ui/
-  upload_panel.py       # 파일 추가, 컬럼 매핑, 시트 미리보기 UI
-  result_panel.py       # 결과 미리보기 및 저장 버튼
-  license_dialog.py     # 라이선스 등록/현황 다이얼로그
-serviceAccountKey.json  # Firebase 서비스 계정 키 (git 제외)
+app/
+  layout.tsx          # 루트 레이아웃
+  page.tsx            # 메인 페이지 (업로드 + 처리 + 결과)
+  history/
+    page.tsx          # 작업 이력 조회 페이지
+components/
+  UploadPanel.tsx     # 파일 드롭 + 컬럼 매핑 테이블
+  ResultPanel.tsx     # 결과 미리보기 + DB저장 + 엑셀저장
+  LicenseDialog.tsx   # 라이선스 등록/현황 모달
+lib/
+  normalizer.ts       # 전화번호 정규화 (구번호→010 변환 포함)
+  loader.ts           # SheetJS로 xlsx/csv 파싱 + 컬럼 자동추론
+  deduplicator.ts     # 시트 통합 + 중복제거 처리
+  exporter.ts         # xlsx 다운로드 (정제결과/전체이력/단일)
+  db.ts               # Supabase dbmerge_jobs/rows CRUD
+  license.ts          # Supabase 라이선스 조회/등록/차감
+  supabase.ts         # Supabase 클라이언트 초기화
+  machineId.ts        # localStorage 기기 ID (UUID)
+types/
+  index.ts            # 공통 타입 정의
 ```
 
 ## 데이터 흐름
-1. `UploadPanel` → 파일 선택 + 컬럼 매핑 → `load_sheet()` → combined_df
-2. `deduplicator.process(combined_df)` → full_df (수정번호 / 비고작업 / 중복작업 컬럼 추가)
-3. `deduplicator.get_unique(full_df)` → unique_df (중복 제거본)
-4. `ResultPanel.show(unique_df, full_df)` → 화면 출력
-5. 저장 버튼 → `exporter.export()` → xlsx 2파일 생성
+1. `UploadPanel` → 파일 드롭 + 컬럼 매핑
+2. `loadFile()` → SheetJS로 파싱 → `SheetEntry[]`
+3. `처리하기` 버튼 → `deduplicator.process()` → `ProcessResult`
+4. `ResultPanel` → 통계 + 미리보기 표시
+5. **DB 저장** → `db.saveJob()` → Supabase `dbmerge_jobs` + `dbmerge_rows`
+6. **엑셀 저장** → `exporter.exportExcel()` → xlsx 2파일 다운로드
+7. `/history` 페이지 → `db.getJobs()` → 이력 조회 + xlsx 다운로드
 
 ## 컬럼 규칙
 
-### 내부 컬럼명 (DataFrame)
-| 컬럼 | 설명 |
+### 내부 컬럼명 (RowRecord)
+| 필드 | 설명 |
 |---|---|
-| group, name, phone, memo | 원본 입력값 (로드 시 매핑) |
-| 원본번호 | phone의 원본값 복사본 |
-| 출처파일 | 파일명 [시트명] |
+| group, name, phone, memo | 원본 입력값 (매핑 기준) |
+| 원본번호 | phone 원본값 복사본 |
+| 출처파일 | `파일명 [시트명]` |
 | 수정번호 | 정규화/변환된 전화번호 (중복 검사 기준) |
-| 비고작업 | '' / '구번호변환' / '오류번호' |
-| 중복작업 | '' / '중복' |
+| 비고작업 | `''` / `'구번호변환'` / `'오류번호'` |
+| 중복작업 | `''` / `'중복'` |
 
 ### 비고작업 값 정의
 - `''` : 정상 010 번호
@@ -44,9 +62,9 @@ serviceAccountKey.json  # Firebase 서비스 계정 키 (git 제외)
 - `'오류번호'` : 빈값, 지역번호, 대표번호, 형식오류, 변환 불가 구번호
 
 ### 중복 검사 규칙
-- `비고작업 != '오류번호'`인 행만 대상
-- `수정번호` 기준 duplicated(keep='first')
-- 중복으로 판정된 행: `중복작업 = '중복'`
+- `비고작업 !== '오류번호'`인 행만 대상
+- `수정번호` 기준 Set으로 keep='first'
+- 중복 판정된 행: `중복작업 = '중복'`
 
 ## 구번호 → 010 변환 테이블
 
@@ -91,20 +109,51 @@ serviceAccountKey.json  # Firebase 서비스 계정 키 (git 제외)
 테이블 범위 밖 구번호는 `비고작업 = '오류번호'`로 처리.
 
 ## 출력 파일
-- 형식: xlsx (Excel 2007+, openpyxl 엔진)
+- 형식: xlsx (SheetJS, Excel 2007+)
 - 파일명: `번호통합_YYYYMMDD_HHMMSS_정제결과.xlsx` / `_전체이력.xlsx`
 - 정제결과: 중복 제거된 행 (그룹/이름/폰번호/수정번호/메모/원본번호/출처파일/비고작업)
 - 전체이력: 전체 행 + 중복작업 컬럼 포함
 
-## 라이선스 (Firestore 연동)
+## Supabase DB 스키마
 
-### 컬렉션: `dbmerge_licenses`
+### dbmerge_jobs (작업 메타)
+| 컬럼 | 설명 |
+|---|---|
+| id | uuid PK |
+| machine_id | 기기 ID (localStorage UUID) |
+| total | 전체 행 수 |
+| unique_count | 정제결과 행 수 |
+| duplicate | 중복 제거 수 |
+| converted | 구번호변환 수 |
+| error | 오류번호 수 |
+| file_names | 업로드 파일명 배열 |
+| created_at | 작업일시 |
+
+### dbmerge_rows (정제결과 행)
+| 컬럼 | 설명 |
+|---|---|
+| id | uuid PK |
+| job_id | dbmerge_jobs.id 참조 |
+| machine_id | 기기 ID |
+| grp / name / phone / fixed_phone / memo / orig_phone / source / remark | 각 컬럼값 |
+
+### RLS 정책
+```sql
+-- 익명 접근 허용 (anon key 사용)
+create policy "anon all jobs" on dbmerge_jobs for all to anon using (true) with check (true);
+create policy "anon all rows" on dbmerge_rows for all to anon using (true) with check (true);
+```
+
+## 라이선스 (Supabase 연동)
+
+### 테이블: `dbmerge_licenses`
 | 필드 | 설명 |
 |---|---|
+| id | uuid PK |
 | name | 사용자 이름 |
 | phone | 전화번호 |
-| computer_name | 컴퓨터 이름 |
-| machine_id | 기기 UUID (`~/.dbmerge_machine_id`) |
+| computer_name | User-Agent |
+| machine_id | 기기 UUID (localStorage) |
 | status | `pending` / `active` / `blocked` |
 | quota | 총 허용 건수 (기본 10,000) |
 | used | 사용 건수 |
@@ -112,33 +161,42 @@ serviceAccountKey.json  # Firebase 서비스 계정 키 (git 제외)
 | registered_at | 등록일 |
 
 ### 동작 흐름
-1. 앱 시작 → 백그라운드 Firestore 조회 → 우측 상단 잔여건수 표시
-2. `도구 → 라이선스 관리` → 이름/전화번호 입력 → 등록
-3. 관리자 콘솔(admin-james.netlify.app) → DB통합정제 탭 → 승인
-4. 저장폴더선택 클릭 → 정제결과 행 수만큼 `used` 자동 차감
+1. 앱 시작 → Supabase 조회 → 헤더 잔여건수 표시
+2. `라이선스 관리` 버튼 → 이름/전화번호 입력 → 등록
+3. 관리자 콘솔 → DB통합정제 탭 → 승인
+4. DB 저장 시 정제결과 행 수만큼 `used` 자동 차감
 
-### serviceAccountKey.json 없을 경우
+### .env.local 설정 없을 경우
 라이선스 기능 비활성화 → 건수 제한 없이 자유롭게 저장 가능
 
-### 관리자 콘솔
+## 환경 변수
+```
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+```
+
+## Supabase 프로젝트
+- URL: https://dtfckunvcjrotqtsyrjs.supabase.co
+- Region: Northeast Asia (Seoul)
+
+## 배포
+- **GitHub**: `voiceofpusan-ux/web-dbmerge`
+- **Vercel**: GitHub 자동 배포 연동 (push → 자동 빌드)
+- **로컬 실행**: `cd E:/github/web-dbmerge && npm run dev`
+
+## 관리자 콘솔
 - URL: https://admin-james.netlify.app
-- 레포: `voiceofpusan-ux/admin-james` (Netlify 자동 배포 연동)
+- 레포: `voiceofpusan-ux/admin-james`
 - 로컬 경로: `E:/github/admin/index.html`
-- push 방법: `cd E:/github/admin && git add index.html && git commit -m "..." && git push`
-
-### Firestore 보안 규칙 (dbmerge_licenses)
-```
-match /dbmerge_licenses/{docId} {
-  allow read, write: if isAdmin();
-  allow read, write: if request.auth == null;
-
-  match /charge_history/{histId} {
-    allow read, write: if isAdmin();
-  }
-}
-```
+- DB통합정제 탭: Firebase `dbmerge_licenses` 사용자 관리 (승인/충전)
+- 작업이력 탭: Supabase `dbmerge_jobs/rows` 전체 조회 + xlsx 다운로드
+  - Supabase URL/Key는 브라우저 localStorage에 저장
 
 ## 의존성
-- pandas, openpyxl, tkinter (표준)
-- firebase-admin>=6.0.0
-- `pip install pandas openpyxl firebase-admin`
+```json
+"next": "^16.2.3",
+"react": "^18.3.1",
+"@supabase/supabase-js": "^2.39.0",
+"xlsx": "^0.18.5",
+"tailwindcss": "^3.4.0"
+```
