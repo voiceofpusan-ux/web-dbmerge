@@ -18,6 +18,7 @@ export default function Home() {
   const [showAccount, setShowAccount] = useState(false);
   const [session,     setSession]     = useState<Session | null>(getSession);
   const [applyNames,  setApplyNames]  = useState(false);
+  const [spaceCount,  setSpaceCount]  = useState(3);
 
   const refreshSession = useCallback(() => {
     setSession(getSession());
@@ -31,7 +32,7 @@ export default function Home() {
     setProcessing(true);
     setTimeout(() => {
       try {
-        setResult(processData(sheets, applyNames));
+        setResult(processData(sheets, applyNames, spaceCount));
       } catch (e) {
         alert(`처리 오류: ${e}`);
       } finally {
@@ -133,18 +134,32 @@ export default function Home() {
 
             <div className="flex flex-col items-center gap-3 pt-2">
               {/* 이름 처리 옵션 */}
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={applyNames}
-                  onChange={(e) => setApplyNames(e.target.checked)}
-                  className="w-4 h-4 accent-blue-600"
-                />
-                <span className="text-sm text-gray-700 font-medium">이름 처리</span>
-                <span className="text-xs text-gray-400">
-                  (2글자 좌우폭조절 · 4글자 이상 분리)
-                </span>
-              </label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={applyNames}
+                    onChange={(e) => setApplyNames(e.target.checked)}
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                  <span className="text-sm text-gray-700 font-medium">이름 처리</span>
+                  <span className="text-xs text-gray-400">(2글자 좌우폭조절 · 4글자 이상 분리)</span>
+                </label>
+                {applyNames && (
+                  <label className="flex items-center gap-1.5 text-sm text-gray-600">
+                    <span>공백</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={spaceCount}
+                      onChange={(e) => setSpaceCount(Math.max(1, Math.min(10, Number(e.target.value))))}
+                      className="w-14 border border-gray-300 rounded px-2 py-0.5 text-center text-sm focus:outline-none focus:border-blue-400"
+                    />
+                    <span>칸</span>
+                  </label>
+                )}
+              </div>
 
               <button
                 onClick={handleProcess}

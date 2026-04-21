@@ -30,7 +30,7 @@ function pickBetter(a: RowRecord, b: RowRecord): RowRecord {
  *    남은 이름 4글자+ → 앞 3글자 유지, 나머지→긴이름나머지, 이름처리='4글자이상'
  *    그 외(1·3글자 일반) → 변환 없음, 수정전이름=''
  */
-function applyNameRules(row: RowRecord): void {
+function applyNameRules(row: RowRecord, spaceCount: number): void {
   const rawName = row.name;                      // 원본 (공백 포함 가능)
   const cleaned = rawName.replace(/\s/g, '');    // 공백 전체 제거
 
@@ -45,7 +45,7 @@ function applyNameRules(row: RowRecord): void {
 
   if (working.length === 2) {
     // 2글자 이름 (일반 or 복성 제거 후)
-    row.name       = working[0] + '   ' + working[1];
+    row.name       = working[0] + ' '.repeat(spaceCount) + working[1];
     row.이름처리   = '좌우폭조절';
     row.수정전이름 = rawName;
   } else if (working.length >= 4) {
@@ -66,7 +66,7 @@ function applyNameRules(row: RowRecord): void {
   }
 }
 
-export function process(sheets: SheetEntry[], applyNames = false): ProcessResult {
+export function process(sheets: SheetEntry[], applyNames = false, spaceCount = 3): ProcessResult {
   const allRows: RowRecord[] = [];
 
   for (const sheet of sheets) {
@@ -120,7 +120,7 @@ export function process(sheets: SheetEntry[], applyNames = false): ProcessResult
   // 이름 처리 (옵션 선택 시에만)
   if (applyNames) {
     for (const row of allRows) {
-      applyNameRules(row);
+      applyNameRules(row, spaceCount);
     }
   }
 
