@@ -1,12 +1,14 @@
 import { RowRecord, SheetEntry, ProcessResult } from '@/types';
 import { normalizePhone } from './normalizer';
 
+const DOUBLE_SURNAMES = new Set(['남궁', '황보', '제갈', '선우', '독고', '사공', '서문', '동방']);
+
 // 우선순위: 이름 > 그룹 > 채워진 컬럼 수 > 메모
 function scoreRow(row: RowRecord): [number, number, number, number] {
-  const hasName = row.name.trim() ? 1 : 0;
-  const hasGroup = row.group.trim() ? 1 : 0;
+  const hasName    = row.name.trim() ? 1 : 0;
+  const hasGroup   = row.group.trim() ? 1 : 0;
   const filledCount = [row.group, row.name, row.memo].filter((v) => v.trim() !== '').length;
-  const hasMemo = row.memo.trim() ? 1 : 0;
+  const hasMemo    = row.memo.trim() ? 1 : 0;
   return [hasName, hasGroup, filledCount, hasMemo];
 }
 
@@ -22,21 +24,45 @@ function pickBetter(a: RowRecord, b: RowRecord): RowRecord {
 /**
  * 이름 처리:
  * 1. 공백 전체 제거
- * 2. 2글자 → 사이에 공백 3칸 삽입, 이름처리='좌우폭조절'
- * 3. 4글자+ → 앞 3글자만 유지, 나머지 → 긴이름나머지, 이름처리='4글자이상'
- * 4. 그 외 → 공백 제거된 이름만 적용
+ * 2. 복성(4글자+ 이름에서 앞 2글자가 복성)이면 복성 제거 후 남은 이름으로 처리
+ * 3. 남은 이름 2글자 → 공백 3칸 삽입, 이름처리='좌우폭조절'
+ *    남은 이름 3글자(복성 제거) → 이름처리='복성제거'
+ *    남은 이름 4글자+ → 앞 3글자 유지, 나머지→긴이름나머지, 이름처리='4글자이상'
+ *    그 외(1·3글자 일반) → 변환 없음, 수정전이름=''
  */
 function applyNameRules(row: RowRecord): void {
-  const name = row.name.replace(/\s/g, ''); // 공백 전체 제거
-  if (name.length === 2) {
-    row.name = name[0] + '   ' + name[1];
-    row.이름처리 = '좌우폭조절';
-  } else if (name.length >= 4) {
-    row.긴이름나머지 = name.slice(3);
-    row.name = name.slice(0, 3);
-    row.이름처리 = '4글자이상';
+  const rawName = row.name;                      // 원본 (공백 포함 가능)
+  const cleaned = rawName.replace(/\s/g, '');    // 공백 전체 제거
+
+  let working        = cleaned;
+  let isDoubleSurname = false;
+
+  // 복성 감지 (4글자 이상일 때만)
+  if (working.length >= 4 && DOUBLE_SURNAMES.has(working.slice(0, 2))) {
+    working        = working.slice(2);
+    isDoubleSurname = true;
+  }
+
+  if (working.length === 2) {
+    // 2글자 이름 (일반 or 복성 제거 후)
+    row.name       = working[0] + '   ' + working[1];
+    row.이름처리   = '좌우폭조절';
+    row.수정전이름 = rawName;
+  } else if (working.length >= 4) {
+    // 4글자 이상 (일반 or 복성 제거 후)
+    row.긴이름나머지 = working.slice(3);
+    row.name         = working.slice(0, 3);
+    row.이름처리     = '4글자이상';
+    row.수정전이름   = rawName;
+  } else if (isDoubleSurname) {
+    // 복성 제거 후 3글자 → 변환 없이 복성만 제거
+    row.name       = working;
+    row.이름처리   = '복성제거';
+    row.수정전이름 = rawName;
   } else {
-    row.name = name;
+    // 1글자 · 3글자 일반 이름 → 공백 제거만, 수정 없음
+    row.name       = cleaned;
+    row.수정전이름 = '';
   }
 }
 
@@ -60,7 +86,8 @@ export function process(sheets: SheetEntry[], applyNames = false): ProcessResult
       allRows.push({
         group:      String(group).trim(),
         name,
-        이름처리:   '',
+        수정전이름:   '',
+        이름처리:    '',
         긴이름나머지: '',
         phone:      String(phone).trim(),
         memo:       String(memo).trim(),

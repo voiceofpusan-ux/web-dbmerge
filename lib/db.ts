@@ -20,6 +20,7 @@ export interface DbRow {
   user_id: string;
   grp: string;
   name: string;
+  orig_name: string;
   name_remark: string;
   long_name: string;
   phone: string;
@@ -38,6 +39,7 @@ function toDbRow(row: RowRecord, jobId: string, userId: string) {
     user_id:     userId,
     grp:         row.group,
     name:        row.name,
+    orig_name:   row.수정전이름,
     name_remark: row.이름처리,
     long_name:   row.긴이름나머지,
     phone:       row.phone,
@@ -125,10 +127,11 @@ export async function getRows(jobId: string): Promise<DbRow[]> {
 /** DbRow → RowRecord 변환 (엑셀 저장용) */
 export function dbRowsToRecords(rows: DbRow[]): RowRecord[] {
   return rows.map((r) => ({
-    group:      r.grp,
-    name:       r.name,
-    이름처리:   r.name_remark ?? '',
-    긴이름나머지: r.long_name ?? '',
+    group:        r.grp,
+    name:         r.name,
+    수정전이름:   r.orig_name   ?? '',
+    이름처리:     (r.name_remark ?? '') as '' | '좌우폭조절' | '복성제거' | '4글자이상',
+    긴이름나머지: r.long_name   ?? '',
     phone:    r.phone,
     memo:     r.memo,
     원본번호: r.orig_phone,

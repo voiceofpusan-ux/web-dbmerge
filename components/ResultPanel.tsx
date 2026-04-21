@@ -17,6 +17,7 @@ interface Props {
 const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
   { key: 'group',      label: '그룹' },
   { key: 'name',       label: '이름' },
+  { key: '수정전이름', label: '수정전이름' },
   { key: '이름처리',   label: '이름처리' },
   { key: '긴이름나머지', label: '긴이름나머지' },
   { key: 'phone',      label: '폰번호' },

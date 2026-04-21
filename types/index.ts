@@ -18,7 +18,8 @@ export interface SheetEntry {
 export interface RowRecord {
   group: string;
   name: string;
-  이름처리: string;
+  수정전이름: string;
+  이름처리: '' | '좌우폭조절' | '복성제거' | '4글자이상';
   긴이름나머지: string;
   phone: string;
   memo: string;
