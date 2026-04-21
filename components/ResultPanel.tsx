@@ -15,16 +15,17 @@ interface Props {
 }
 
 const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
-  { key: 'group',      label: '그룹' },
-  { key: 'name',       label: '이름' },
-  { key: '수정전이름', label: '수정전이름' },
-  { key: '이름처리',   label: '이름처리' },
+  { key: 'group',        label: '그룹' },
+  { key: 'name',         label: '이름' },
+  { key: '수정번호',     label: '수정번호' },
+  { key: '원본번호',     label: '원본번호' },
+  { key: 'phone',        label: '폰번호' },
+  { key: 'memo',         label: '메모' },
+  { key: '출처파일',     label: '출처파일' },
+  { key: '비고작업',     label: '비고작업' },
+  { key: '수정전이름',   label: '수정전이름' },
+  { key: '이름처리',     label: '이름처리' },
   { key: '긴이름나머지', label: '긴이름나머지' },
-  { key: 'phone',      label: '폰번호' },
-  { key: '수정번호',   label: '수정번호' },
-  { key: 'memo',       label: '메모' },
-  { key: '출처파일',   label: '출처파일' },
-  { key: '비고작업',   label: '비고작업' },
 ];
 
 export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh }: Props) {
@@ -159,7 +160,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
           disabled={saving}
           className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
         >
-          {saving ? '저장 중...' : '엑셀 저장 (2파일)'}
+          {saving ? '저장 중...' : '엑셀 저장'}
         </button>
       </div>
     </div>

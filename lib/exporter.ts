@@ -10,8 +10,8 @@ function getTimestamp(): string {
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}_${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
 }
 
-const HEADERS: string[]            = ['그룹', '이름', '수정전이름', '이름처리', '긴이름나머지', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업', '중복작업'];
-const COLS: (keyof RowRecord)[]    = ['group', 'name', '수정전이름', '이름처리', '긴이름나머지', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업', '중복작업'];
+const HEADERS: string[]            = ['그룹', '이름', '수정번호', '원본번호', '폰번호', '메모', '출처파일', '비고작업', '중복작업', '수정전이름', '이름처리', '긴이름나머지'];
+const COLS: (keyof RowRecord)[]    = ['group', 'name', '수정번호', '원본번호', 'phone', 'memo', '출처파일', '비고작업', '중복작업', '수정전이름', '이름처리', '긴이름나머지'];
 
 function makeSheet(rows: RowRecord[]) {
   const data = [HEADERS, ...rows.map((r) => COLS.map((c) => r[c] ?? ''))];
