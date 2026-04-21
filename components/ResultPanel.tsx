@@ -15,13 +15,15 @@ interface Props {
 }
 
 const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
-  { key: 'group',    label: '그룹' },
-  { key: 'name',     label: '이름' },
-  { key: 'phone',    label: '폰번호' },
-  { key: '수정번호', label: '수정번호' },
-  { key: 'memo',     label: '메모' },
-  { key: '출처파일', label: '출처파일' },
-  { key: '비고작업', label: '비고작업' },
+  { key: 'group',      label: '그룹' },
+  { key: 'name',       label: '이름' },
+  { key: '이름처리',   label: '이름처리' },
+  { key: '긴이름나머지', label: '긴이름나머지' },
+  { key: 'phone',      label: '폰번호' },
+  { key: '수정번호',   label: '수정번호' },
+  { key: 'memo',       label: '메모' },
+  { key: '출처파일',   label: '출처파일' },
+  { key: '비고작업',   label: '비고작업' },
 ];
 
 export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh }: Props) {
@@ -32,24 +34,24 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
 
   const { uniqueRows, allRows, stats } = result;
 
-  // 엑셀 파일로 저장 (2파일)
+  // 엑셀 파일로 저장 (2파일) — 라이선스 차감 없음, 로컬 다운로드
   const handleSaveExcel = async () => {
     setSaving(true);
     try {
-      if (licConfigured) {
-        const { ok, message } = await consumeLicense(uniqueRows.length);
-        if (!ok) { alert(message); return; }
-        onLicenseRefresh();
-      }
       exportExcel(uniqueRows, allRows);
     } finally {
       setSaving(false);
     }
   };
 
-  // DB에 저장
+  // DB에 저장 — 라이선스 차감 후 저장
   const handleSaveDb = async () => {
     if (!dbConfigured) { alert('Supabase가 설정되지 않았습니다.'); return; }
+    if (licConfigured) {
+      const { ok, message } = await consumeLicense(uniqueRows.length);
+      if (!ok) { alert(message); return; }
+      onLicenseRefresh();
+    }
     setDbSaving(true);
     setDbProgress(0);
     setDbSaved(false);
@@ -92,7 +94,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
                 {DISPLAY_COLS.map((c) => (
                   <td
                     key={c.key}
-                    className={`px-3 py-1.5 whitespace-nowrap ${
+                    className={`px-3 py-1.5 ${c.key === 'name' ? 'whitespace-pre' : 'whitespace-nowrap'} ${
                       c.key === '비고작업' && row[c.key]
                         ? row[c.key] === '오류번호' ? 'text-red-500' : 'text-orange-500'
                         : 'text-gray-700'

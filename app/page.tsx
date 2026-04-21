@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import Link from 'next/link';
-import { SheetEntry, ProcessResult, LicenseInfo } from '@/types';
+import { SheetEntry, ProcessResult, Session } from '@/types';
 import UploadPanel from '@/components/UploadPanel';
 import ResultPanel from '@/components/ResultPanel';
 import LicenseDialog from '@/components/LicenseDialog';
 import { process as processData } from '@/lib/deduplicator';
-import { getLicense, isConfigured as licConfigured } from '@/lib/license';
+import { getSession, isConfigured as licConfigured } from '@/lib/license';
 import { isConfigured as dbConfigured } from '@/lib/supabase';
 
 export default function Home() {
@@ -15,15 +15,13 @@ export default function Home() {
   const [selectedId,  setSelectedId]  = useState<string | null>(null);
   const [result,      setResult]      = useState<ProcessResult | null>(null);
   const [processing,  setProcessing]  = useState(false);
-  const [showLicense, setShowLicense] = useState(false);
-  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
+  const [showAccount, setShowAccount] = useState(false);
+  const [session,     setSession]     = useState<Session | null>(getSession);
+  const [applyNames,  setApplyNames]  = useState(false);
 
-  const refreshLicense = useCallback(async () => {
-    if (!licConfigured) return;
-    try { setLicenseInfo(await getLicense()); } catch {}
+  const refreshSession = useCallback(() => {
+    setSession(getSession());
   }, []);
-
-  useEffect(() => { refreshLicense(); }, [refreshLicense]);
 
   const selectedSheet = sheets.find((s) => s.id === selectedId);
   const fileNames = [...new Set(sheets.map((s) => s.fileName))];
@@ -33,7 +31,7 @@ export default function Home() {
     setProcessing(true);
     setTimeout(() => {
       try {
-        setResult(processData(sheets));
+        setResult(processData(sheets, applyNames));
       } catch (e) {
         alert(`처리 오류: ${e}`);
       } finally {
@@ -42,22 +40,21 @@ export default function Home() {
     }, 50);
   };
 
+  const remaining = session ? session.quota - session.used : 0;
+
   const quotaText = () => {
     if (!licConfigured) return null;
-    if (!licenseInfo) return '잔여 처리건수: 미등록';
-    const rem = licenseInfo.quota - licenseInfo.used;
-    if (licenseInfo.status === 'pending') return '잔여 처리건수: 승인 대기중';
-    if (licenseInfo.status === 'blocked') return '잔여 처리건수: 차단됨';
-    if (rem <= 0) return '잔여 처리건수: 0건 (충전 필요)';
-    return `잔여 처리건수: ${rem.toLocaleString()}건`;
+    if (!session) return '잔여건수: 로그인 필요';
+    if (session.is_admin) return '슈퍼어드민';
+    if (remaining <= 0) return '잔여건수: 0건 (충전 필요)';
+    return `잔여건수: ${remaining.toLocaleString()}건`;
   };
 
   const quotaColor = () => {
-    if (!licenseInfo) return 'text-gray-400';
-    const rem = licenseInfo.quota - licenseInfo.used;
-    if (licenseInfo.status !== 'active') return 'text-orange-500';
-    if (rem <= 0) return 'text-red-600';
-    if (rem <= 1000) return 'text-orange-500';
+    if (!session) return 'text-gray-400';
+    if (session.is_admin) return 'text-purple-600';
+    if (remaining <= 0) return 'text-red-600';
+    if (remaining <= 1000) return 'text-orange-500';
     return 'text-green-600';
   };
 
@@ -71,18 +68,15 @@ export default function Home() {
             <span className={`text-sm ${quotaColor()}`}>{quotaText()}</span>
           )}
           {dbConfigured && (
-            <Link
-              href="/history"
-              className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
+            <Link href="/history" className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50">
               작업 이력
             </Link>
           )}
           <button
-            onClick={() => setShowLicense(true)}
+            onClick={() => setShowAccount(true)}
             className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50"
           >
-            라이선스 관리
+            {session ? `${session.name} 님` : '로그인'}
           </button>
         </div>
       </header>
@@ -137,7 +131,21 @@ export default function Home() {
               )}
             </div>
 
-            <div className="flex justify-center pt-2">
+            <div className="flex flex-col items-center gap-3 pt-2">
+              {/* 이름 처리 옵션 */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={applyNames}
+                  onChange={(e) => setApplyNames(e.target.checked)}
+                  className="w-4 h-4 accent-blue-600"
+                />
+                <span className="text-sm text-gray-700 font-medium">이름 처리</span>
+                <span className="text-xs text-gray-400">
+                  (2글자 좌우폭조절 · 4글자 이상 분리)
+                </span>
+              </label>
+
               <button
                 onClick={handleProcess}
                 disabled={sheets.length === 0 || processing}
@@ -154,14 +162,14 @@ export default function Home() {
               result={result}
               fileNames={fileNames}
               onClose={() => setResult(null)}
-              onLicenseRefresh={refreshLicense}
+              onLicenseRefresh={refreshSession}
             />
           </div>
         )}
       </main>
 
-      {showLicense && (
-        <LicenseDialog onClose={() => setShowLicense(false)} onRefresh={refreshLicense} />
+      {showAccount && (
+        <LicenseDialog onClose={() => setShowAccount(false)} onRefresh={refreshSession} />
       )}
     </div>
   );

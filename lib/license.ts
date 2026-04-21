@@ -1,53 +1,120 @@
 import { supabase, isConfigured } from './supabase';
-import { getMachineId } from './machineId';
-import { LicenseInfo } from '@/types';
+import { LicenseInfo, Session } from '@/types';
 
 export { isConfigured };
 
-export async function getLicense(): Promise<LicenseInfo | null> {
-  if (!supabase) return null;
-  const machineId = getMachineId();
-  const { data } = await supabase
-    .from('dbmerge_licenses')
-    .select('*')
-    .eq('machine_id', machineId)
-    .maybeSingle();
-  return data as LicenseInfo | null;
+const SESSION_KEY = 'dbmerge_session';
+
+async function hashPassword(phone: string, password: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(phone + password));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function registerLicense(name: string, phone: string): Promise<LicenseInfo> {
+function saveSession(lic: LicenseInfo): Session {
+  const session: Session = {
+    id:       lic.id,
+    name:     lic.name,
+    phone:    lic.phone,
+    is_admin: lic.is_admin,
+    quota:    lic.quota,
+    used:     lic.used,
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  return session;
+}
+
+export function getSession(): Session | null {
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem(SESSION_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Session; } catch { return null; }
+}
+
+export function logout(): void {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+export async function login(phone: string, password: string): Promise<Session> {
+  if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const hashed = await hashPassword(phone, password);
+
+  const { data, error } = await supabase
+    .from('dbmerge_licenses')
+    .select('*')
+    .eq('phone', phone)
+    .eq('password', hashed)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error('전화번호 또는 비밀번호가 올바르지 않습니다.');
+
+  const lic = data as LicenseInfo;
+  if (lic.status === 'blocked') throw new Error('사용이 차단된 계정입니다. 관리자에게 문의하세요.');
+
+  return saveSession(lic);
+}
+
+export async function register(name: string, phone: string, password: string): Promise<Session> {
   if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
 
-  const existing = await getLicense();
-  if (existing) return existing;
+  const { data: existing } = await supabase
+    .from('dbmerge_licenses')
+    .select('id')
+    .eq('phone', phone)
+    .maybeSingle();
 
-  const machineId = getMachineId();
+  if (existing) throw new Error('이미 등록된 전화번호입니다.');
+
+  const hashed = await hashPassword(phone, password);
+
   const { data, error } = await supabase
     .from('dbmerge_licenses')
     .insert({
       name,
       phone,
-      computer_name: navigator.userAgent.slice(0, 200),
-      machine_id: machineId,
-      status: 'pending',
-      quota: 10000,
-      used: 0,
+      password:     hashed,
+      is_admin:     false,
+      status:       'active',
+      quota:        100,
+      used:         0,
       charge_count: 0,
     })
     .select()
     .single();
 
   if (error) throw new Error(error.message);
-  return data as LicenseInfo;
+  return saveSession(data as LicenseInfo);
+}
+
+export async function refreshSession(): Promise<Session | null> {
+  if (!supabase) return null;
+  const session = getSession();
+  if (!session) return null;
+
+  const { data } = await supabase
+    .from('dbmerge_licenses')
+    .select('*')
+    .eq('id', session.id)
+    .maybeSingle();
+
+  if (!data) return null;
+  return saveSession(data as LicenseInfo);
 }
 
 export async function consumeLicense(count: number): Promise<{ ok: boolean; message: string }> {
   if (!isConfigured) return { ok: true, message: '' };
 
-  const lic = await getLicense();
-  if (!lic) return { ok: false, message: '미등록 기기입니다.\n라이선스 등록을 먼저 해주세요.' };
-  if (lic.status === 'pending') return { ok: false, message: '관리자 승인 대기 중입니다.\n승인 후 저장이 가능합니다.' };
-  if (lic.status === 'blocked') return { ok: false, message: '사용이 차단된 기기입니다.\n관리자에게 문의하세요.' };
+  const session = getSession();
+  if (!session) return { ok: false, message: '로그인이 필요합니다.' };
+
+  const { data: lic } = await supabase!
+    .from('dbmerge_licenses')
+    .select('*')
+    .eq('id', session.id)
+    .maybeSingle();
+
+  if (!lic) return { ok: false, message: '계정 정보를 찾을 수 없습니다.' };
+  if (lic.status === 'blocked') return { ok: false, message: '사용이 차단된 계정입니다.' };
 
   const remaining = lic.quota - lic.used;
   if (remaining < count) {
@@ -63,5 +130,7 @@ export async function consumeLicense(count: number): Promise<{ ok: boolean; mess
     .eq('id', lic.id);
 
   if (error) return { ok: false, message: `차감 오류: ${error.message}` };
-  return { ok: true, message: `${count.toLocaleString()}건 차감 완료 (잔여: ${(remaining - count).toLocaleString()}건)` };
+
+  saveSession({ ...lic, used: lic.used + count });
+  return { ok: true, message: '' };
 }

@@ -18,6 +18,8 @@ export interface SheetEntry {
 export interface RowRecord {
   group: string;
   name: string;
+  이름처리: string;
+  긴이름나머지: string;
   phone: string;
   memo: string;
   원본번호: string;
@@ -43,11 +45,20 @@ export interface LicenseInfo {
   id: string;
   name: string;
   phone: string;
-  computer_name: string;
-  machine_id: string;
-  status: 'pending' | 'active' | 'blocked';
+  password: string;
+  is_admin: boolean;
+  status: 'active' | 'blocked';
   quota: number;
   used: number;
   charge_count: number;
   registered_at: string;
+}
+
+export interface Session {
+  id: string;
+  name: string;
+  phone: string;
+  is_admin: boolean;
+  quota: number;
+  used: number;
 }

@@ -26,8 +26,8 @@ export function exportSingle(rows: RowRecord[], label = '정제결과') {
   XLSX.utils.book_append_sheet(
     wb,
     makeSheet(
-      ['그룹', '이름', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업'],
-      ['group', 'name', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업'],
+      ['그룹', '이름', '이름처리', '긴이름나머지', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업'],
+      ['group', 'name', '이름처리', '긴이름나머지', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업'],
       rows,
     ),
     label,
@@ -43,8 +43,8 @@ export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[]) {
   XLSX.utils.book_append_sheet(
     wb1,
     makeSheet(
-      ['그룹', '이름', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업'],
-      ['group', 'name', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업'],
+      ['그룹', '이름', '이름처리', '긴이름나머지', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업'],
+      ['group', 'name', '이름처리', '긴이름나머지', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업'],
       uniqueRows,
     ),
     '정제결과',
@@ -56,8 +56,8 @@ export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[]) {
   XLSX.utils.book_append_sheet(
     wb2,
     makeSheet(
-      ['그룹', '이름', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업', '중복작업'],
-      ['group', 'name', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업', '중복작업'],
+      ['그룹', '이름', '이름처리', '긴이름나머지', '폰번호', '수정번호', '메모', '원본번호', '출처파일', '비고작업', '중복작업'],
+      ['group', 'name', '이름처리', '긴이름나머지', 'phone', '수정번호', 'memo', '원본번호', '출처파일', '비고작업', '중복작업'],
       allRows,
     ),
     '전체이력',

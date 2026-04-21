@@ -1,10 +1,10 @@
 import { supabase } from './supabase';
-import { getMachineId } from './machineId';
+import { getSession } from './license';
 import { RowRecord, ProcessResult } from '@/types';
 
 export interface JobRecord {
   id: string;
-  machine_id: string;
+  user_id: string;
   total: number;
   unique_count: number;
   duplicate: number;
@@ -17,9 +17,11 @@ export interface JobRecord {
 export interface DbRow {
   id: string;
   job_id: string;
-  machine_id: string;
+  user_id: string;
   grp: string;
   name: string;
+  name_remark: string;
+  long_name: string;
   phone: string;
   fixed_phone: string;
   memo: string;
@@ -30,12 +32,14 @@ export interface DbRow {
 
 const CHUNK = 500;
 
-function toDbRow(row: RowRecord, jobId: string, machineId: string) {
+function toDbRow(row: RowRecord, jobId: string, userId: string) {
   return {
     job_id:      jobId,
-    machine_id:  machineId,
+    user_id:     userId,
     grp:         row.group,
     name:        row.name,
+    name_remark: row.이름처리,
+    long_name:   row.긴이름나머지,
     phone:       row.phone,
     fixed_phone: row.수정번호,
     memo:        row.memo,
@@ -53,13 +57,13 @@ export async function saveJob(
 ): Promise<string> {
   if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
 
-  const machineId = getMachineId();
+  const session = getSession();
+  const userId = session?.id ?? 'anonymous';
 
-  // 1. 작업 메타 저장
   const { data: job, error: jobErr } = await supabase
     .from('dbmerge_jobs')
     .insert({
-      machine_id:   machineId,
+      user_id:      userId,
       total:        result.stats.total,
       unique_count: result.stats.unique,
       duplicate:    result.stats.duplicate,
@@ -73,7 +77,6 @@ export async function saveJob(
   if (jobErr) throw new Error(jobErr.message);
   onProgress?.(5);
 
-  // 2. 정제결과 행 배치 INSERT
   const rows = result.uniqueRows;
   const chunks: RowRecord[][] = [];
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -83,7 +86,7 @@ export async function saveJob(
   for (let i = 0; i < chunks.length; i++) {
     const { error } = await supabase
       .from('dbmerge_rows')
-      .insert(chunks[i].map((r) => toDbRow(r, job.id, machineId)));
+      .insert(chunks[i].map((r) => toDbRow(r, job.id, userId)));
     if (error) throw new Error(`행 저장 오류 (청크 ${i + 1}): ${error.message}`);
     onProgress?.(5 + Math.round(((i + 1) / chunks.length) * 95));
   }
@@ -91,14 +94,18 @@ export async function saveJob(
   return job.id;
 }
 
-/** 현재 기기의 작업 이력 목록 */
+/** 현재 로그인 사용자의 작업 이력 */
 export async function getJobs(): Promise<JobRecord[]> {
   if (!supabase) return [];
+  const session = getSession();
+  if (!session) return [];
+
   const { data, error } = await supabase
     .from('dbmerge_jobs')
     .select('*')
-    .eq('machine_id', getMachineId())
+    .eq('user_id', session.id)
     .order('created_at', { ascending: false });
+
   if (error) throw new Error(error.message);
   return (data ?? []) as JobRecord[];
 }
@@ -118,8 +125,10 @@ export async function getRows(jobId: string): Promise<DbRow[]> {
 /** DbRow → RowRecord 변환 (엑셀 저장용) */
 export function dbRowsToRecords(rows: DbRow[]): RowRecord[] {
   return rows.map((r) => ({
-    group:    r.grp,
-    name:     r.name,
+    group:      r.grp,
+    name:       r.name,
+    이름처리:   r.name_remark ?? '',
+    긴이름나머지: r.long_name ?? '',
     phone:    r.phone,
     memo:     r.memo,
     원본번호: r.orig_phone,
