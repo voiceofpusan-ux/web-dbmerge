@@ -42,14 +42,8 @@ export function normalizePhone(raw: string): NormalizeResult {
   let digits = raw.replace(/\D/g, '');
   if (!digits) return ['', '오류번호'];
 
-  // 맨 앞 0 누락 처리
-  // 010 계열: 10자리이고 '10'으로 시작 → 0 삽입 → 11자리
-  //           9자리이고 '10'으로 시작 → 0 삽입 → 10자리
-  // 구번호 계열: 9자리이고 '11','16','17','18','19'로 시작 → 0 삽입 → 10자리
-  const MOBILE_NO_ZERO = /^1(0|1|6|7|8|9)/;
-  if (digits.length === 10 && digits.startsWith('10')) {
-    digits = '0' + digits;
-  } else if (digits.length === 9 && MOBILE_NO_ZERO.test(digits)) {
+  // 맨 앞 0 누락 처리: 10/11/16/17/18/19로 시작하면 무조건 0 삽입
+  if (/^1[016789]/.test(digits)) {
     digits = '0' + digits;
   }
 
