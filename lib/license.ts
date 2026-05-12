@@ -1,5 +1,6 @@
 import { supabase, isConfigured } from './supabase';
 import { LicenseInfo, Session } from '@/types';
+import { getMachineId } from './machineId';
 
 export { isConfigured };
 
@@ -51,6 +52,19 @@ export async function login(phone: string, password: string): Promise<Session> {
   const lic = data as LicenseInfo;
   if (lic.status === 'blocked') throw new Error('사용이 차단된 계정입니다. 관리자에게 문의하세요.');
 
+  // 슈퍼어드민은 기기 제한 없음
+  if (!lic.is_admin) {
+    const mid = await getMachineId();
+    if (lic.machine_id && lic.machine_id !== mid) {
+      throw new Error('다른 기기에서 등록된 계정입니다.\n기기 변경이 필요하면 관리자에게 기기 초기화를 요청하세요.');
+    }
+    // 최초 로그인 또는 기기 초기화 후 첫 로그인 → 현재 기기 등록
+    if (!lic.machine_id) {
+      await supabase!.from('dbmerge_licenses').update({ machine_id: mid }).eq('id', lic.id);
+      lic.machine_id = mid;
+    }
+  }
+
   return saveSession(lic);
 }
 
@@ -66,6 +80,7 @@ export async function register(name: string, phone: string, password: string): P
   if (existing) throw new Error('이미 등록된 전화번호입니다.');
 
   const hashed = await hashPassword(phone, password);
+  const mid = await getMachineId();
 
   const { data, error } = await supabase
     .from('dbmerge_licenses')
@@ -73,6 +88,7 @@ export async function register(name: string, phone: string, password: string): P
       name,
       phone,
       password:     hashed,
+      machine_id:   mid,
       is_admin:     false,
       status:       'active',
       quota:        300,

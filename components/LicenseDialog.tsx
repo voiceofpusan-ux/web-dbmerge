@@ -168,13 +168,13 @@ export default function LicenseDialog({ onClose, onRefresh }: Props) {
                 disabled={loading}
                 className="py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium mt-1"
               >
-                {loading ? '처리 중...' : tab === 'login' ? '로그인' : '가입하기 (무료 100건 제공)'}
+                {loading ? '처리 중...' : tab === 'login' ? '로그인' : '가입하기 (무료 300건 제공)'}
               </button>
             </div>
 
             {tab === 'register' && (
               <p className="text-xs text-gray-400 text-center">
-                가입 즉시 100건 무료 제공 · 추가 충전은 관리자 문의
+                가입 즉시 300건 무료 제공 · 추가 충전은 관리자 문의
               </p>
             )}
           </>

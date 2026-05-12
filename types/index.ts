@@ -47,6 +47,7 @@ export interface LicenseInfo {
   name: string;
   phone: string;
   password: string;
+  machine_id: string;
   is_admin: boolean;
   status: 'active' | 'blocked';
   quota: number;
