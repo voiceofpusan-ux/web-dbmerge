@@ -122,6 +122,7 @@ export async function consumeLicense(count: number): Promise<{ ok: boolean; mess
 
   const session = getSession();
   if (!session) return { ok: false, message: '로그인이 필요합니다.' };
+  if (session.is_admin) return { ok: true, message: '' };
 
   const { data: lic } = await supabase!
     .from('dbmerge_licenses')
