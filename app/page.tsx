@@ -15,7 +15,7 @@ export default function Home() {
   const [selectedId,  setSelectedId]  = useState<string | null>(null);
   const [result,      setResult]      = useState<ProcessResult | null>(null);
   const [processing,  setProcessing]  = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
+  const [showAccount, setShowAccount] = useState(() => licConfigured && !getSession());
   const [session,     setSession]     = useState<Session | null>(getSession);
   const [applyNames,  setApplyNames]  = useState(false);
   const [spaceCount,  setSpaceCount]  = useState(3);
@@ -184,7 +184,10 @@ export default function Home() {
       </main>
 
       {showAccount && (
-        <LicenseDialog onClose={() => setShowAccount(false)} onRefresh={refreshSession} />
+        <LicenseDialog
+          onClose={() => { if (!licConfigured || session) setShowAccount(false); }}
+          onRefresh={refreshSession}
+        />
       )}
     </div>
   );

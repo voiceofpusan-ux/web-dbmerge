@@ -75,7 +75,7 @@ export async function register(name: string, phone: string, password: string): P
       password:     hashed,
       is_admin:     false,
       status:       'active',
-      quota:        100,
+      quota:        300,
       used:         0,
       charge_count: 0,
     })
