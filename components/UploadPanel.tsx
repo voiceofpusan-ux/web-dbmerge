@@ -12,11 +12,18 @@ interface Props {
 }
 
 const FIELD_LABELS: { key: keyof ColumnMap; label: string }[] = [
-  { key: 'group',     label: '그룹' },
-  { key: 'last_name', label: '성' },
-  { key: 'name',      label: '이름' },
-  { key: 'phone',     label: '폰번호' },
-  { key: 'memo',      label: '메모' },
+  { key: 'group',      label: '그룹' },
+  { key: 'last_name',  label: '성' },
+  { key: 'name',       label: '이름' },
+  { key: 'phone',      label: '폰번호' },
+  { key: 'memo',       label: '메모' },
+  { key: 'address',    label: '주소' },
+  { key: 'party_type', label: '당원구분' },
+  { key: 'note1',      label: '비고1' },
+  { key: 'note2',      label: '비고2' },
+  { key: 'note3',      label: '비고3' },
+  { key: 'note4',      label: '비고4' },
+  { key: 'note5',      label: '비고5' },
 ];
 
 export default function UploadPanel({ sheets, onSheetsChange, selectedId, onSelectSheet }: Props) {

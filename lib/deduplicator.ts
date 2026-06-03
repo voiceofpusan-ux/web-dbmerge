@@ -7,7 +7,7 @@ const DOUBLE_SURNAMES = new Set(['남궁', '황보', '제갈', '선우', '독고
 function scoreRow(row: RowRecord): [number, number, number, number] {
   const hasName    = row.name.trim() ? 1 : 0;
   const hasGroup   = row.group.trim() ? 1 : 0;
-  const filledCount = [row.group, row.name, row.memo].filter((v) => v.trim() !== '').length;
+  const filledCount = [row.group, row.name, row.memo, row.주소, row.당원구분, row.비고1, row.비고2, row.비고3, row.비고4, row.비고5].filter((v) => v.trim() !== '').length;
   const hasMemo    = row.memo.trim() ? 1 : 0;
   return [hasName, hasGroup, filledCount, hasMemo];
 }
@@ -77,9 +77,16 @@ export function process(sheets: SheetEntry[], applyNames = false, spaceCount = 3
       const lastName  = columnMap.last_name ? (raw[columnMap.last_name] ?? '') : '';
       const firstName = columnMap.name      ? (raw[columnMap.name]      ?? '') : '';
       const name  = (lastName + firstName).trim();
-      const phone = columnMap.phone ? (raw[columnMap.phone] ?? '') : '';
-      const group = columnMap.group ? (raw[columnMap.group] ?? '') : '';
-      const memo  = columnMap.memo  ? (raw[columnMap.memo]  ?? '') : '';
+      const phone      = columnMap.phone      ? (raw[columnMap.phone]      ?? '') : '';
+      const group      = columnMap.group      ? (raw[columnMap.group]      ?? '') : '';
+      const memo       = columnMap.memo       ? (raw[columnMap.memo]       ?? '') : '';
+      const address    = columnMap.address    ? (raw[columnMap.address]    ?? '') : '';
+      const party_type = columnMap.party_type ? (raw[columnMap.party_type] ?? '') : '';
+      const note1      = columnMap.note1      ? (raw[columnMap.note1]      ?? '') : '';
+      const note2      = columnMap.note2      ? (raw[columnMap.note2]      ?? '') : '';
+      const note3      = columnMap.note3      ? (raw[columnMap.note3]      ?? '') : '';
+      const note4      = columnMap.note4      ? (raw[columnMap.note4]      ?? '') : '';
+      const note5      = columnMap.note5      ? (raw[columnMap.note5]      ?? '') : '';
 
       const [수정번호, 비고작업] = normalizePhone(String(phone).trim());
 
@@ -96,6 +103,13 @@ export function process(sheets: SheetEntry[], applyNames = false, spaceCount = 3
         수정번호,
         비고작업,
         중복작업:   '',
+        주소:       String(address).trim(),
+        당원구분:   String(party_type).trim(),
+        비고1:      String(note1).trim(),
+        비고2:      String(note2).trim(),
+        비고3:      String(note3).trim(),
+        비고4:      String(note4).trim(),
+        비고5:      String(note5).trim(),
       });
     }
   }

@@ -29,6 +29,13 @@ export interface DbRow {
   orig_phone: string;
   source: string;
   remark: string;
+  address: string;
+  party_type: string;
+  note1: string;
+  note2: string;
+  note3: string;
+  note4: string;
+  note5: string;
 }
 
 const CHUNK = 500;
@@ -48,6 +55,13 @@ function toDbRow(row: RowRecord, jobId: string, userId: string) {
     orig_phone:  row.원본번호,
     source:      row.출처파일,
     remark:      row.비고작업,
+    address:     row.주소,
+    party_type:  row.당원구분,
+    note1:       row.비고1,
+    note2:       row.비고2,
+    note3:       row.비고3,
+    note4:       row.비고4,
+    note5:       row.비고5,
   };
 }
 
@@ -139,5 +153,12 @@ export function dbRowsToRecords(rows: DbRow[]): RowRecord[] {
     수정번호: r.fixed_phone,
     비고작업: r.remark as '' | '구번호변환' | '오류번호',
     중복작업: '',
+    주소:     r.address    ?? '',
+    당원구분: r.party_type ?? '',
+    비고1:    r.note1      ?? '',
+    비고2:    r.note2      ?? '',
+    비고3:    r.note3      ?? '',
+    비고4:    r.note4      ?? '',
+    비고5:    r.note5      ?? '',
   }));
 }

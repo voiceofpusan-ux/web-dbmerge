@@ -3,19 +3,26 @@ import { ColumnMap, SheetEntry } from '@/types';
 
 const COLUMN_KEYWORDS: Record<keyof ColumnMap, string[]> = {
   // name을 last_name보다 먼저 배치 → '성명'이 last_name으로 잘못 매핑되는 것 방지
-  name:      ['이름', '성명', '담당자', 'name', '고객명', '수신인', '수신자', '고객'],
-  last_name: ['성', '성씨', 'last_name', 'lastname'],
-  phone:     ['전화', '번호', '폰', 'phone', '핸드폰', '휴대폰', '핸드폰번호', '휴대폰번호', '연락처', '전화번호', '모바일', '휴대전화'],
-  group:     ['그룹', '부서', '팀', 'group', '분류', '구분'],
-  memo:      ['메모', '비고', '특이사항', 'memo', 'note', '내용', '기타'],
+  name:       ['이름', '성명', '담당자', 'name', '고객명', '수신인', '수신자', '고객'],
+  last_name:  ['성', '성씨', 'last_name', 'lastname'],
+  phone:      ['전화', '번호', '폰', 'phone', '핸드폰', '휴대폰', '핸드폰번호', '휴대폰번호', '연락처', '전화번호', '모바일', '휴대전화'],
+  group:      ['그룹', '부서', '팀', 'group', '분류', '구분'],
+  memo:       ['메모', '특이사항', 'memo', '내용', '기타'],
+  address:    ['주소', '거주지', '소재지', 'address'],
+  party_type: ['당원구분', '당원', '구분', '유형', '분류'],
+  note1:      ['비고1', 'note1', '비고_1'],
+  note2:      ['비고2', 'note2', '비고_2'],
+  note3:      ['비고3', 'note3', '비고_3'],
+  note4:      ['비고4', 'note4', '비고_4'],
+  note5:      ['비고5', 'note5', '비고_5'],
 };
 
 function autoInfer(headers: string[]): ColumnMap {
-  const result: ColumnMap = { group: '', last_name: '', name: '', phone: '', memo: '' };
+  const result: ColumnMap = { group: '', last_name: '', name: '', phone: '', memo: '', address: '', party_type: '', note1: '', note2: '', note3: '', note4: '', note5: '' };
   const used = new Set<string>();
 
   // 우선순위: name 먼저 → last_name에서 '성명' 오매핑 방지
-  const order: (keyof ColumnMap)[] = ['name', 'phone', 'group', 'memo', 'last_name'];
+  const order: (keyof ColumnMap)[] = ['name', 'phone', 'group', 'memo', 'last_name', 'address', 'party_type', 'note1', 'note2', 'note3', 'note4', 'note5'];
 
   for (const field of order) {
     for (const header of headers) {
