@@ -39,11 +39,11 @@ export interface DbRow {
 }
 
 const CHUNK = 500;
+const PAGE  = 1000;   // Supabase 기본 응답 제한(1000행)
 
-function toDbRow(row: RowRecord, jobId: string, userId: string) {
+// job_id·user_id는 서버(dbmerge_add_rows)가 채움
+function toDbRow(row: RowRecord) {
   return {
-    job_id:      jobId,
-    user_id:     userId,
     grp:         row.group,
     name:        row.name,
     orig_name:   row.수정전이름,
@@ -65,30 +65,33 @@ function toDbRow(row: RowRecord, jobId: string, userId: string) {
   };
 }
 
-/** 정제결과(uniqueRows)를 DB에 저장. onProgress(0~100) 콜백 지원 */
+function requireToken(): string {
+  const token = getSession()?.token;
+  if (!token) throw new Error('로그인이 필요합니다.');
+  return token;
+}
+
+/**
+ * 정제결과(uniqueRows)를 DB에 저장. onProgress(0~100) 콜백 지원
+ * 건수 차감은 서버(dbmerge_start_job)에서 하고, 행 저장이 실패하면 작업을 취소해 환불받음
+ */
 export async function saveJob(
   result: ProcessResult,
   fileNames: string[],
   onProgress?: (pct: number) => void,
 ): Promise<string> {
   if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const token = requireToken();
 
-  const session = getSession();
-  const userId = session?.id ?? 'anonymous';
-
-  const { data: job, error: jobErr } = await supabase
-    .from('dbmerge_jobs')
-    .insert({
-      user_id:      userId,
-      total:        result.stats.total,
-      unique_count: result.stats.unique,
-      duplicate:    result.stats.duplicate,
-      converted:    result.stats.converted,
-      error:        result.stats.error,
-      file_names:   fileNames,
-    })
-    .select()
-    .single();
+  const { data: jobId, error: jobErr } = await supabase.rpc('dbmerge_start_job', {
+    p_token:      token,
+    p_total:      result.stats.total,
+    p_unique:     result.stats.unique,
+    p_duplicate:  result.stats.duplicate,
+    p_converted:  result.stats.converted,
+    p_error:      result.stats.error,
+    p_file_names: fileNames,
+  });
 
   if (jobErr) throw new Error(jobErr.message);
   onProgress?.(5);
@@ -100,14 +103,19 @@ export async function saveJob(
   }
 
   for (let i = 0; i < chunks.length; i++) {
-    const { error } = await supabase
-      .from('dbmerge_rows')
-      .insert(chunks[i].map((r) => toDbRow(r, job.id, userId)));
-    if (error) throw new Error(`행 저장 오류 (청크 ${i + 1}): ${error.message}`);
+    const { error } = await supabase.rpc('dbmerge_add_rows', {
+      p_token:  token,
+      p_job_id: jobId,
+      p_rows:   chunks[i].map(toDbRow),
+    });
+    if (error) {
+      await supabase.rpc('dbmerge_abort_job', { p_token: token, p_job_id: jobId });
+      throw new Error(`행 저장 오류 (청크 ${i + 1}): ${error.message}`);
+    }
     onProgress?.(5 + Math.round(((i + 1) / chunks.length) * 95));
   }
 
-  return job.id;
+  return jobId as string;
 }
 
 /** 현재 로그인 사용자의 작업 이력 */
@@ -116,26 +124,30 @@ export async function getJobs(): Promise<JobRecord[]> {
   const session = getSession();
   if (!session) return [];
 
-  const { data, error } = await supabase
-    .from('dbmerge_jobs')
-    .select('*')
-    .eq('user_id', session.id)
-    .order('created_at', { ascending: false });
+  const { data, error } = await supabase.rpc('dbmerge_get_jobs', { p_token: session.token });
 
   if (error) throw new Error(error.message);
   return (data ?? []) as JobRecord[];
 }
 
-/** 특정 작업의 결과 행 전체 조회 */
+/** 특정 작업의 결과 행 전체 조회 (1000행씩 나눠 받음) */
 export async function getRows(jobId: string): Promise<DbRow[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('dbmerge_rows')
-    .select('*')
-    .eq('job_id', jobId)
-    .order('id', { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DbRow[];
+  const token = requireToken();
+
+  const all: DbRow[] = [];
+  for (;;) {
+    const { data, error } = await supabase.rpc('dbmerge_get_rows', {
+      p_token:  token,
+      p_job_id: jobId,
+      p_offset: all.length,
+      p_limit:  PAGE,
+    });
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as DbRow[];
+    all.push(...page);
+    if (page.length < PAGE) return all;
+  }
 }
 
 /** DbRow → RowRecord 변환 (엑셀 저장용) */
