@@ -40,9 +40,9 @@ types/
 2. `loadFile()` → SheetJS로 파싱 → `SheetEntry[]`
 3. `처리하기` 버튼 → `deduplicator.process()` → `ProcessResult`
 4. `ResultPanel` → 통계 + 미리보기 표시
-5. **DB 저장** → `db.saveJob()` → Supabase `dbmerge_jobs` + `dbmerge_rows`
+5. **DB 저장** → `db.saveJob()` → RPC `dbmerge_start_job`(건수 차감) → `dbmerge_add_rows`(500행씩) → 실패 시 `dbmerge_abort_job`(삭제·환불)
 6. **엑셀 저장** → `exporter.exportExcel()` → xlsx 2파일 다운로드
-7. `/history` 페이지 → `db.getJobs()` → 이력 조회 + xlsx 다운로드
+7. `/history` 페이지 → `db.getJobs()` / `db.getRows()`(1000행씩) → 이력 조회 + xlsx 다운로드
 
 ## 컬럼 규칙
 
@@ -137,12 +137,27 @@ types/
 | machine_id | 기기 ID |
 | grp / name / phone / fixed_phone / memo / orig_phone / source / remark | 각 컬럼값 |
 
-### RLS 정책
-```sql
--- 익명 접근 허용 (anon key 사용)
-create policy "anon all jobs" on dbmerge_jobs for all to anon using (true) with check (true);
-create policy "anon all rows" on dbmerge_rows for all to anon using (true) with check (true);
-```
+### 접근 권한 (서버 함수만 허용)
+브라우저(anon 키)는 dbmerge 테이블에 직접 접근할 수 없고, `SECURITY DEFINER` 서버 함수(RPC)만 호출한다.
+SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행한다.
+
+1. `supabase/01_rpc_functions.sql` — 세션 테이블·서버 함수 추가 (기존 앱 영향 없음, 반복 실행 가능)
+2. 새 앱 배포
+3. `supabase/02_lockdown.sql` — 기존 "anon all" 정책 삭제, anon/authenticated 테이블 권한 회수
+
+| 함수 | 역할 |
+|---|---|
+| `dbmerge_register` / `dbmerge_login` | 가입·로그인 → `{ token, profile }` 반환 |
+| `dbmerge_me` / `dbmerge_logout` | 내 정보(잔여건수) 조회 / 토큰 폐기 |
+| `dbmerge_start_job` | `used + n <= quota` 조건으로 원자적 차감 후 작업 생성 |
+| `dbmerge_add_rows` | 내 작업에만, 차감한 건수 이내로 행 저장 |
+| `dbmerge_abort_job` | 작업·행 삭제 + 환불 |
+| `dbmerge_get_jobs` / `dbmerge_get_rows` | 내 작업 이력 / 행 페이지 조회 |
+
+- 세션: `dbmerge_sessions`에 토큰의 SHA-256만 저장, 30일 만료. 무효 토큰은 errcode `28000`
+- 비밀번호: bcrypt. 기존 SHA-256(전화번호+비밀번호) 해시는 로그인 성공 시 bcrypt로 교체
+- localStorage 세션은 화면 표시용. 권한·잔여건수는 항상 서버에서 판단
+- SQL 테스트: `createdb dbmerge_test && psql -v ON_ERROR_STOP=1 -d dbmerge_test -f supabase/tests/run_all.sql`
 
 ## 라이선스 (Supabase 연동)
 
@@ -155,16 +170,18 @@ create policy "anon all rows" on dbmerge_rows for all to anon using (true) with 
 | computer_name | User-Agent |
 | machine_id | 기기 UUID (localStorage) |
 | status | `pending` / `active` / `blocked` |
-| quota | 총 허용 건수 (기본 10,000) |
+| password | bcrypt 해시 (기존 계정은 첫 로그인 전까지 SHA-256) |
+| is_admin | 슈퍼어드민 (건수 차감·기기 제한 없음) |
+| quota | 총 허용 건수 (가입 시 300) |
 | used | 사용 건수 |
 | charge_count | 충전 횟수 |
 | registered_at | 등록일 |
 
 ### 동작 흐름
-1. 앱 시작 → Supabase 조회 → 헤더 잔여건수 표시
-2. `라이선스 관리` 버튼 → 이름/전화번호 입력 → 등록
-3. 관리자 콘솔 → DB통합정제 탭 → 승인
-4. DB 저장 시 정제결과 행 수만큼 `used` 자동 차감
+1. 앱 시작 → localStorage 세션으로 헤더 잔여건수 표시
+2. `로그인` 버튼 → 회원가입(즉시 활성, 300건) 또는 로그인 → 서버가 세션 토큰 발급
+3. 관리자 콘솔 → DB통합정제 탭 → 충전·차단·기기초기화
+4. DB 저장 시 서버가 정제결과 행 수만큼 `used` 차감, 저장 실패 시 환불
 
 ### .env.local 설정 없을 경우
 라이선스 기능 비활성화 → 건수 제한 없이 자유롭게 저장 가능
@@ -188,7 +205,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 - URL: https://admin-james.netlify.app
 - 레포: `voiceofpusan-ux/admin-james`
 - 로컬 경로: `E:/github/admin/index.html`
-- DB통합정제 탭: Firebase `dbmerge_licenses` 사용자 관리 (승인/충전)
+- DB통합정제 탭: Supabase `dbmerge_licenses` 사용자 관리 (충전/차단/PW·기기 초기화)
+  - `02_lockdown.sql` 적용 후에는 anon 키가 아니라 **service_role 키**로 연결해야 함
 - 작업이력 탭: Supabase `dbmerge_jobs/rows` 전체 조회 + xlsx 다운로드
   - Supabase URL/Key는 브라우저 localStorage에 저장
 
