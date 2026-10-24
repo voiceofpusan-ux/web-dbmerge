@@ -10,30 +10,22 @@ const OLD_PREFIX_RANGES: Record<string, [number, number, number][]> = {
 };
 
 function convertOldPrefix(prefix: string, rest: string): NormalizeResult {
-  // rest = 7자리 (국번 + 가입자번호)
-  // 4자리 국번 우선 검사 (1700~9999 범위)
+  // rest = 7자리(3자리 국번 + 가입자번호) 또는 8자리(4자리 국번 + 가입자번호)
   const ranges = OLD_PREFIX_RANGES[prefix];
-  if (!ranges || rest.length !== 7) return [rest, '오류번호'];
+  const gukbunLen = rest.length - 4;
+  if (!ranges || (gukbunLen !== 3 && gukbunLen !== 4)) return [rest, '오류번호'];
 
-  const gukbun4 = parseInt(rest.slice(0, 4));
-  const sub3 = rest.slice(4);
+  const gukbun = parseInt(rest.slice(0, gukbunLen));
+  const sub = rest.slice(gukbunLen);
   for (const [lo, hi, offset] of ranges) {
-    if (lo >= 1000 && gukbun4 >= lo && gukbun4 <= hi) {
-      const newGukbun = gukbun4 + offset;
-      return [`010-${String(newGukbun).padStart(4, '0')}-${sub3}`, '구번호변환'];
+    // 국번 자릿수와 범위 자릿수가 같은 것만 비교 (3자리: 200~899, 4자리: 1700~9999)
+    if ((lo >= 1000) === (gukbunLen === 4) && gukbun >= lo && gukbun <= hi) {
+      const newGukbun = gukbun + offset;
+      return [`010-${String(newGukbun).padStart(4, '0')}-${sub}`, '구번호변환'];
     }
   }
 
-  const gukbun3 = parseInt(rest.slice(0, 3));
-  const sub4 = rest.slice(3);
-  for (const [lo, hi, offset] of ranges) {
-    if (lo < 1000 && gukbun3 >= lo && gukbun3 <= hi) {
-      const newGukbun = gukbun3 + offset;
-      return [`010-${String(newGukbun).padStart(4, '0')}-${sub4}`, '구번호변환'];
-    }
-  }
-
-  return [`${prefix}-${rest.slice(0, 3)}-${rest.slice(3)}`, '오류번호'];
+  return [`${prefix}-${rest.slice(0, gukbunLen)}-${sub}`, '오류번호'];
 }
 
 export function normalizePhone(raw: string): NormalizeResult {
@@ -58,10 +50,10 @@ export function normalizePhone(raw: string): NormalizeResult {
     return [raw, '오류번호'];
   }
 
-  // 구번호 (01x-XXXXXXX = 10자리)
+  // 구번호 (01x-XXX-XXXX = 10자리, 01x-XXXX-XXXX = 11자리)
   const oldPrefixes = ['011', '016', '017', '018', '019'];
   for (const prefix of oldPrefixes) {
-    if (digits.startsWith(prefix) && digits.length === 10) {
+    if (digits.startsWith(prefix) && (digits.length === 10 || digits.length === 11)) {
       return convertOldPrefix(prefix, digits.slice(3));
     }
   }
