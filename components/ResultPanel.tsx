@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ProcessResult, RowRecord } from '@/types';
 import { exportExcel } from '@/lib/exporter';
-import { consumeLicense, isConfigured as licConfigured } from '@/lib/license';
+import { consumeLicense, refundLicense, isConfigured as licConfigured } from '@/lib/license';
 import { saveJob } from '@/lib/db';
 import { isConfigured as dbConfigured } from '@/lib/supabase';
 
@@ -68,6 +68,11 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
       await saveJob(result, fileNames, setDbProgress);
       setDbSaved(true);
     } catch (e: unknown) {
+      // 저장 실패 시 먼저 차감한 건수를 되돌림
+      if (licConfigured) {
+        await refundLicense(uniqueRows.length);
+        onLicenseRefresh();
+      }
       alert(`DB 저장 오류: ${e instanceof Error ? e.message : e}`);
     } finally {
       setDbSaving(false);

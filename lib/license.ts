@@ -151,3 +151,27 @@ export async function consumeLicense(count: number): Promise<{ ok: boolean; mess
   saveSession({ ...lic, used: lic.used + count });
   return { ok: true, message: '' };
 }
+
+/** DB 저장 실패 시 consumeLicense로 차감했던 건수를 되돌림 */
+export async function refundLicense(count: number): Promise<void> {
+  if (!isConfigured) return;
+
+  const session = getSession();
+  if (!session || session.is_admin) return;
+
+  const { data: lic } = await supabase!
+    .from('dbmerge_licenses')
+    .select('*')
+    .eq('id', session.id)
+    .maybeSingle();
+
+  if (!lic) return;
+
+  const used = Math.max(0, lic.used - count);
+  const { error } = await supabase!
+    .from('dbmerge_licenses')
+    .update({ used })
+    .eq('id', lic.id);
+
+  if (!error) saveSession({ ...lic, used });
+}
