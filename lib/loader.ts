@@ -17,6 +17,9 @@ const COLUMN_KEYWORDS: Record<keyof ColumnMap, string[]> = {
   note5:      ['비고5', 'note5', '비고_5'],
 };
 
+// 너무 일반적인 키워드는 헤더와 정확히 같을 때만 매칭 ('성별'→성, '당원구분'→그룹, '일련번호'→폰번호 오매핑 방지)
+const EXACT_ONLY = new Set(['성', '번호', '구분']);
+
 function autoInfer(headers: string[]): ColumnMap {
   const result: ColumnMap = { group: '', last_name: '', name: '', phone: '', memo: '', address: '', party_type: '', note1: '', note2: '', note3: '', note4: '', note5: '' };
   const used = new Set<string>();
@@ -29,7 +32,8 @@ function autoInfer(headers: string[]): ColumnMap {
       if (used.has(header)) continue;
       const h = header.toLowerCase().trim();
       for (const kw of COLUMN_KEYWORDS[field]) {
-        if (h === kw.toLowerCase() || h.includes(kw.toLowerCase())) {
+        const k = kw.toLowerCase();
+        if (h === k || (!EXACT_ONLY.has(kw) && h.includes(k))) {
           result[field] = header;
           used.add(header);
           break;
