@@ -60,10 +60,14 @@ export async function loadFile(file: File): Promise<Omit<SheetEntry, 'id'>[]> {
 
           if (rows.length < 2) continue;
 
-          const headers = rows[0].map((h) => String(h).trim()).filter(Boolean);
+          // 빈 헤더 열은 제외하되 원래 열 위치(i)를 유지해야 값이 밀리지 않음
+          const cols = rows[0]
+            .map((h, i) => ({ h: String(h).trim(), i }))
+            .filter(({ h }) => h);
+          const headers = cols.map(({ h }) => h);
           const rowData = rows.slice(1).map((row) => {
             const obj: Record<string, string> = {};
-            headers.forEach((h, i) => {
+            cols.forEach(({ h, i }) => {
               obj[h] = String(row[i] ?? '');
             });
             return obj;
