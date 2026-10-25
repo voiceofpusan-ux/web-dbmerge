@@ -17,6 +17,9 @@ const COLUMN_KEYWORDS: Record<keyof ColumnMap, string[]> = {
   note5:      ['비고5', 'note5', '비고_5'],
 };
 
+// 너무 일반적인 키워드는 헤더와 정확히 같을 때만 매칭 ('성별'→성, '당원구분'→그룹, '일련번호'→폰번호 오매핑 방지)
+const EXACT_ONLY = new Set(['성', '번호', '구분']);
+
 function autoInfer(headers: string[]): ColumnMap {
   const result: ColumnMap = { group: '', last_name: '', name: '', phone: '', memo: '', address: '', party_type: '', note1: '', note2: '', note3: '', note4: '', note5: '' };
   const used = new Set<string>();
@@ -29,7 +32,8 @@ function autoInfer(headers: string[]): ColumnMap {
       if (used.has(header)) continue;
       const h = header.toLowerCase().trim();
       for (const kw of COLUMN_KEYWORDS[field]) {
-        if (h === kw.toLowerCase() || h.includes(kw.toLowerCase())) {
+        const k = kw.toLowerCase();
+        if (h === k || (!EXACT_ONLY.has(kw) && h.includes(k))) {
           result[field] = header;
           used.add(header);
           break;
@@ -60,10 +64,14 @@ export async function loadFile(file: File): Promise<Omit<SheetEntry, 'id'>[]> {
 
           if (rows.length < 2) continue;
 
-          const headers = rows[0].map((h) => String(h).trim()).filter(Boolean);
+          // 빈 헤더 열은 제외하되 원래 열 위치(i)를 유지해야 값이 밀리지 않음
+          const cols = rows[0]
+            .map((h, i) => ({ h: String(h).trim(), i }))
+            .filter(({ h }) => h);
+          const headers = cols.map(({ h }) => h);
           const rowData = rows.slice(1).map((row) => {
             const obj: Record<string, string> = {};
-            headers.forEach((h, i) => {
+            cols.forEach(({ h, i }) => {
               obj[h] = String(row[i] ?? '');
             });
             return obj;

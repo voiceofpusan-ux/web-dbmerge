@@ -56,21 +56,8 @@ export interface ProcessResult {
   };
 }
 
-export interface LicenseInfo {
-  id: string;
-  name: string;
-  phone: string;
-  password: string;
-  machine_id: string;
-  is_admin: boolean;
-  status: 'active' | 'blocked';
-  quota: number;
-  used: number;
-  charge_count: number;
-  registered_at: string;
-}
-
 export interface Session {
+  token: string;   // 서버(dbmerge_login/register)가 발급한 세션 토큰
   id: string;
   name: string;
   phone: string;

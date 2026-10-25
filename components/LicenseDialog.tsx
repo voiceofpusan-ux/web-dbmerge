@@ -57,8 +57,8 @@ export default function LicenseDialog({ onClose, onRefresh }: Props) {
     }
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     setSession(null);
     onRefresh();
   };
