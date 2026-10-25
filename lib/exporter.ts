@@ -33,11 +33,3 @@ export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[]) {
   XLSX.utils.book_append_sheet(wb, makeSheet(sorted), '통합결과');
   XLSX.writeFile(wb, `번호통합_${ts}.xlsx`);
 }
-
-/** DB 이력에서 다운로드 — 단일 시트 */
-export function exportSingle(rows: RowRecord[], label = '정제결과') {
-  const ts = getTimestamp();
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, makeSheet(rows), label);
-  XLSX.writeFile(wb, `번호통합_${ts}_${label}.xlsx`);
-}
