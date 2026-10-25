@@ -17,17 +17,17 @@ app/
   layout.tsx          # 루트 레이아웃
   page.tsx            # 메인 페이지 (업로드 + 처리 + 결과)
   history/
-    page.tsx          # 작업 이력 조회 페이지
+    page.tsx          # 사용 이력(엑셀받기 차감 기록) 조회 페이지
 components/
   UploadPanel.tsx     # 파일 드롭 + 컬럼 매핑 테이블
-  ResultPanel.tsx     # 결과 미리보기 + DB저장 + 엑셀저장
+  ResultPanel.tsx     # 결과 미리보기 + 엑셀받기(차감 확인 창)
   LicenseDialog.tsx   # 라이선스 등록/현황 모달
 lib/
   normalizer.ts       # 전화번호 정규화 (구번호→010 변환 포함)
   loader.ts           # SheetJS로 xlsx/csv 파싱 + 컬럼 자동추론
   deduplicator.ts     # 시트 통합 + 중복제거 처리
-  exporter.ts         # xlsx 다운로드 (정제결과/전체이력/단일)
-  db.ts               # Supabase dbmerge_jobs/rows CRUD
+  exporter.ts         # xlsx 다운로드 (정제결과 위 + 중복 행 아래, 단일 시트)
+  db.ts               # 엑셀받기 건수 차감(chargeExport) + 사용 이력 조회
   license.ts          # Supabase 라이선스 조회/등록/차감
   supabase.ts         # Supabase 클라이언트 초기화
   machineId.ts        # localStorage 기기 ID (UUID)
@@ -40,9 +40,11 @@ types/
 2. `loadFile()` → SheetJS로 파싱 → `SheetEntry[]`
 3. `처리하기` 버튼 → `deduplicator.process()` → `ProcessResult`
 4. `ResultPanel` → 통계 + 미리보기 표시
-5. **DB 저장** → `db.saveJob()` → RPC `dbmerge_start_job`(건수 차감) → `dbmerge_add_rows`(500행씩) → 실패 시 `dbmerge_abort_job`(삭제·환불)
-6. **엑셀 저장** → `exporter.exportExcel()` → xlsx 2파일 다운로드
-7. `/history` 페이지 → `db.getJobs()` / `db.getRows()`(1000행씩) → 이력 조회 + xlsx 다운로드
+5. **엑셀받기** → 확인 창(이번 차감·현재 잔여·차감 후 잔여) → `db.chargeExport()` → RPC `dbmerge_start_job`(서버 차감 + 사용 기록) → `exporter.exportExcel()` 다운로드
+   - 연락처 행은 서버로 보내지 않음 (통계만 전송). DB 저장 기능은 없음
+   - 같은 결과 다시 받기는 추가 차감 없음, "다시 작업" 후 새로 처리하면 다시 차감
+   - Supabase 미설정(로컬) 환경에서는 차감 없이 바로 다운로드
+6. `/history` 페이지 → `db.getJobs()` → 사용 이력(날짜·파일명·차감 건수)
 
 ## 컬럼 규칙
 
@@ -129,14 +131,6 @@ types/
 | file_names | 업로드 파일명 배열 |
 | created_at | 작업일시 |
 
-### dbmerge_rows (정제결과 행)
-| 컬럼 | 설명 |
-|---|---|
-| id | uuid PK |
-| job_id | dbmerge_jobs.id 참조 |
-| machine_id | 기기 ID |
-| grp / name / phone / fixed_phone / memo / orig_phone / source / remark | 각 컬럼값 |
-
 ### 접근 권한 (서버 함수만 허용)
 브라우저(anon 키)는 dbmerge 테이블에 직접 접근할 수 없고, `SECURITY DEFINER` 서버 함수(RPC)만 호출한다.
 SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행한다.
@@ -145,8 +139,9 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 1. `supabase/00_schema.sql` — 테이블 생성
 2. `supabase/01_rpc_functions.sql` — 세션 테이블·서버 함수 추가
 3. `supabase/02_lockdown.sql` — anon/authenticated 테이블 권한 회수
-4. Vercel 환경 변수(`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`)를 새 프로젝트 값으로 바꾸고 재배포
-5. 앱에서 관리자 계정 가입 후 SQL Editor에서 `update dbmerge_licenses set is_admin = true where phone = '관리자 전화번호';`
+4. `supabase/03_remove_row_storage.sql` — (이전 버전 SQL을 실행한 프로젝트만 필요) 연락처 행 테이블·함수 삭제
+5. Vercel 환경 변수(`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`)를 새 프로젝트 값으로 바꾸고 재배포
+6. 앱에서 관리자 계정 가입 후 SQL Editor에서 `update dbmerge_licenses set is_admin = true where phone = '관리자 전화번호';`
 
 **기존 테이블이 있는 프로젝트** — `01` 실행 → 새 앱 배포 → `02` 실행 (01은 기존 앱에 영향 없음, 반복 실행 가능)
 
@@ -154,10 +149,8 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 |---|---|
 | `dbmerge_register` / `dbmerge_login` | 가입·로그인 → `{ token, profile }` 반환 |
 | `dbmerge_me` / `dbmerge_logout` | 내 정보(잔여건수) 조회 / 토큰 폐기 |
-| `dbmerge_start_job` | `used + n <= quota` 조건으로 원자적 차감 후 작업 생성 |
-| `dbmerge_add_rows` | 내 작업에만, 차감한 건수 이내로 행 저장 |
-| `dbmerge_abort_job` | 작업·행 삭제 + 환불 |
-| `dbmerge_get_jobs` / `dbmerge_get_rows` | 내 작업 이력 / 행 페이지 조회 |
+| `dbmerge_start_job` | 엑셀받기 때 `used + n <= quota` 조건으로 원자적 차감 + 사용 기록 생성 |
+| `dbmerge_get_jobs` | 내 사용 이력 조회 |
 
 - 세션: `dbmerge_sessions`에 토큰의 SHA-256만 저장, 30일 만료. 무효 토큰은 errcode `28000`
 - 비밀번호: bcrypt. 기존 SHA-256(전화번호+비밀번호) 해시는 로그인 성공 시 bcrypt로 교체
@@ -188,7 +181,7 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 1. 앱 시작 → localStorage 세션으로 헤더 잔여건수 표시
 2. `로그인` 버튼 → 회원가입(즉시 활성, 300건) 또는 로그인 → 서버가 세션 토큰 발급
 3. 관리자 콘솔 → DB통합정제 탭 → 충전·차단·기기초기화
-4. DB 저장 시 서버가 정제결과 행 수만큼 `used` 차감, 저장 실패 시 환불
+4. 엑셀받기 시 서버가 정제결과 행 수(오류번호 포함)만큼 `used` 차감. 잔여 부족 시 다운로드 불가
 
 ### .env.local 설정 없을 경우
 라이선스 기능 비활성화 → 건수 제한 없이 자유롭게 저장 가능
@@ -215,7 +208,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 - 로컬 경로: `E:/github/admin/index.html`
 - DB통합정제 탭: Supabase `dbmerge_licenses` 사용자 관리 (충전/차단/PW·기기 초기화)
   - `02_lockdown.sql` 적용 후에는 anon 키가 아니라 **service_role 키**로 연결해야 함
-- 작업이력 탭: Supabase `dbmerge_jobs/rows` 전체 조회 + xlsx 다운로드
+- 작업이력 탭: `dbmerge_rows`(연락처 행)는 삭제됨. `dbmerge_jobs`(사용 기록)만 남아 있음
   - Supabase URL/Key는 브라우저 localStorage에 저장
 
 ## 의존성
