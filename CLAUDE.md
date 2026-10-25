@@ -141,9 +141,14 @@ types/
 브라우저(anon 키)는 dbmerge 테이블에 직접 접근할 수 없고, `SECURITY DEFINER` 서버 함수(RPC)만 호출한다.
 SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행한다.
 
-1. `supabase/01_rpc_functions.sql` — 세션 테이블·서버 함수 추가 (기존 앱 영향 없음, 반복 실행 가능)
-2. 새 앱 배포
-3. `supabase/02_lockdown.sql` — 기존 "anon all" 정책 삭제, anon/authenticated 테이블 권한 회수
+**새 프로젝트** (빈 DB)
+1. `supabase/00_schema.sql` — 테이블 생성
+2. `supabase/01_rpc_functions.sql` — 세션 테이블·서버 함수 추가
+3. `supabase/02_lockdown.sql` — anon/authenticated 테이블 권한 회수
+4. Vercel 환경 변수(`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`)를 새 프로젝트 값으로 바꾸고 재배포
+5. 앱에서 관리자 계정 가입 후 SQL Editor에서 `update dbmerge_licenses set is_admin = true where phone = '관리자 전화번호';`
+
+**기존 테이블이 있는 프로젝트** — `01` 실행 → 새 앱 배포 → `02` 실행 (01은 기존 앱에 영향 없음, 반복 실행 가능)
 
 | 함수 | 역할 |
 |---|---|
@@ -157,7 +162,9 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 - 세션: `dbmerge_sessions`에 토큰의 SHA-256만 저장, 30일 만료. 무효 토큰은 errcode `28000`
 - 비밀번호: bcrypt. 기존 SHA-256(전화번호+비밀번호) 해시는 로그인 성공 시 bcrypt로 교체
 - localStorage 세션은 화면 표시용. 권한·잔여건수는 항상 서버에서 판단
-- SQL 테스트: `createdb dbmerge_test && psql -v ON_ERROR_STOP=1 -d dbmerge_test -f supabase/tests/run_all.sql`
+- SQL 테스트 (로컬 Postgres, 빈 DB)
+  - 새 프로젝트 경로: `createdb dbmerge_fresh && psql -v ON_ERROR_STOP=1 -d dbmerge_fresh -f supabase/tests/run_fresh.sql`
+  - 기존 테이블 경로: `createdb dbmerge_test && psql -v ON_ERROR_STOP=1 -d dbmerge_test -f supabase/tests/run_all.sql`
 
 ## 라이선스 (Supabase 연동)
 
@@ -193,8 +200,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 ```
 
 ## Supabase 프로젝트
-- URL: https://dtfckunvcjrotqtsyrjs.supabase.co
-- Region: Northeast Asia (Seoul)
+- 기존 프로젝트(`dtfckunvcjrotqtsyrjs`)는 삭제됨 (2026-10). 새 프로젝트를 만들면 URL을 여기에 기록
+- Region: Northeast Asia (Seoul) 권장
 
 ## 배포
 - **GitHub**: `voiceofpusan-ux/web-dbmerge`
