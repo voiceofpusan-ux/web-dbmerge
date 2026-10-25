@@ -18,6 +18,8 @@ select test.ok((select count(*) from dbmerge_licenses) = 3, '1단계 후에도 �
 reset role;
 
 \ir ../02_lockdown.sql
+\ir ../03_remove_row_storage.sql
+\ir ../03_remove_row_storage.sql
 \ir 20_rpc_test.sql
 
 \echo 'ALL SQL TESTS PASSED'

@@ -1,4 +1,4 @@
--- 1단계: 로그인·건수 차감·작업 저장을 서버 함수(RPC)로 옮김. 추가만 하므로 기존 앱은 계속 동작함
+-- 1단계: 로그인·건수 차감·사용 기록을 서버 함수(RPC)로 처리. 추가만 하므로 기존 앱은 계속 동작함
 --
 -- 적용: Supabase 대시보드 → SQL Editor에 붙여넣고 실행 (여러 번 실행해도 안전)
 -- 순서: 이 파일 → 새 앱 배포 → 02_lockdown.sql
@@ -15,9 +15,6 @@ create table if not exists public.dbmerge_sessions (
 );
 alter table public.dbmerge_sessions enable row level security;
 revoke all on public.dbmerge_sessions from anon, authenticated;
-
--- 함수에서 job_id::text로 비교하므로 같은 식으로 인덱스 생성 (job_id가 uuid든 text든 동작)
-create index if not exists dbmerge_rows_job_id_text_idx on public.dbmerge_rows ((job_id::text));
 
 -- ── 내부 함수 (anon 호출 불가) ────────────────────────────────
 
@@ -77,24 +74,6 @@ begin
     raise exception '사용이 차단된 계정입니다. 관리자에게 문의하세요.' using errcode = '28000';
   end if;
   return v;
-end $$;
-
--- 작업 소유자 확인 후 잠금
-create or replace function public._dbmerge_own_job(v public.dbmerge_licenses, p_job_id text)
-returns public.dbmerge_jobs
-language plpgsql security definer
-set search_path = public, extensions
-as $$
-declare
-  j dbmerge_jobs;
-begin
-  select * into j from dbmerge_jobs
-  where id::text = p_job_id and user_id::text = v.id::text
-  for update;
-  if not found then
-    raise exception '작업을 찾을 수 없습니다.';
-  end if;
-  return j;
 end $$;
 
 -- ── 계정 ──────────────────────────────────────────────────────
@@ -189,9 +168,9 @@ language sql security definer
 set search_path = public, extensions
 as $$ delete from dbmerge_sessions where token_hash = _dbmerge_token_hash(p_token) $$;
 
--- ── 작업 저장 ─────────────────────────────────────────────────
+-- ── 엑셀받기 건수 차감 ────────────────────────────────────────
 
--- 정제결과 행 수(p_unique)만큼 건수를 차감하고 작업을 만든 뒤 작업 ID 반환
+-- 엑셀받기 때 정제결과 행 수(p_unique)만큼 건수를 차감하고 사용 기록을 남긴 뒤 기록 ID 반환 (연락처는 저장하지 않음)
 create or replace function public.dbmerge_start_job(
   p_token text, p_total int, p_unique int, p_duplicate int, p_converted int, p_error int, p_file_names jsonb
 )
@@ -236,50 +215,6 @@ begin
   return v_job_id;
 end $$;
 
--- 행 묶음 저장. 차감한 건수(unique_count)를 넘게 저장할 수 없음
-create or replace function public.dbmerge_add_rows(p_token text, p_job_id text, p_rows jsonb)
-returns int
-language plpgsql security definer
-set search_path = public, extensions
-as $$
-declare
-  j     dbmerge_jobs := _dbmerge_own_job(_dbmerge_auth(p_token), p_job_id);
-  n     int := jsonb_array_length(coalesce(p_rows, '[]'::jsonb));
-  saved int;
-begin
-  select count(*) into saved from dbmerge_rows where job_id::text = j.id::text;
-  if saved + n > coalesce(j.unique_count, 0) then
-    raise exception '차감한 건수보다 많은 행을 저장할 수 없습니다.';
-  end if;
-
-  -- id·job_id·user_id는 서버에서 채움 (요청에 들어온 값은 형 변환 전에 제거)
-  insert into dbmerge_rows (job_id, user_id, grp, name, orig_name, name_remark, long_name, phone, fixed_phone,
-                            memo, orig_phone, source, remark, address, party_type, note1, note2, note3, note4, note5)
-  select j.id, j.user_id, r.grp, r.name, r.orig_name, r.name_remark, r.long_name, r.phone, r.fixed_phone,
-         r.memo, r.orig_phone, r.source, r.remark, r.address, r.party_type, r.note1, r.note2, r.note3, r.note4, r.note5
-  from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) e,
-       jsonb_populate_record(null::dbmerge_rows, e - 'id' - 'job_id' - 'user_id') r;
-
-  return n;
-end $$;
-
--- 저장 실패 시: 작업과 저장된 행을 지우고 차감한 건수를 되돌림
-create or replace function public.dbmerge_abort_job(p_token text, p_job_id text)
-returns void
-language plpgsql security definer
-set search_path = public, extensions
-as $$
-declare
-  v dbmerge_licenses := _dbmerge_auth(p_token);
-  j dbmerge_jobs     := _dbmerge_own_job(v, p_job_id);
-begin
-  delete from dbmerge_rows where job_id::text = j.id::text;
-  delete from dbmerge_jobs where id = j.id;
-  if not coalesce(v.is_admin, false) then
-    update dbmerge_licenses set used = greatest(0, used - coalesce(j.unique_count, 0)) where id = v.id;
-  end if;
-end $$;
-
 -- ── 이력 조회 ─────────────────────────────────────────────────
 
 create or replace function public.dbmerge_get_jobs(p_token text)
@@ -294,49 +229,23 @@ begin
     select * from dbmerge_jobs where user_id::text = v.id::text order by created_at desc;
 end $$;
 
--- Supabase 기본 응답 제한(1000행) 때문에 페이지 단위로 조회
-create or replace function public.dbmerge_get_rows(p_token text, p_job_id text, p_offset int, p_limit int)
-returns setof public.dbmerge_rows
-language plpgsql security definer
-set search_path = public, extensions
-as $$
-declare
-  v dbmerge_licenses := _dbmerge_auth(p_token);
-begin
-  if not exists (select 1 from dbmerge_jobs where id::text = p_job_id and user_id::text = v.id::text) then
-    raise exception '작업을 찾을 수 없습니다.';
-  end if;
-  return query
-    select * from dbmerge_rows where job_id::text = p_job_id
-    order by id
-    offset greatest(coalesce(p_offset, 0), 0)
-    limit least(greatest(coalesce(p_limit, 1000), 1), 1000);
-end $$;
-
 -- ── 권한 ──────────────────────────────────────────────────────
 -- Supabase는 새 함수를 anon에게 기본 허용하므로 내부 함수는 명시적으로 회수
 revoke all on function public._dbmerge_token_hash(text)                          from public, anon, authenticated;
 revoke all on function public._dbmerge_profile(public.dbmerge_licenses)          from public, anon, authenticated;
 revoke all on function public._dbmerge_new_session(text)                         from public, anon, authenticated;
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
-revoke all on function public._dbmerge_own_job(public.dbmerge_licenses, text)    from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;
 revoke all on function public.dbmerge_login(text, text, text)                             from public;
 revoke all on function public.dbmerge_me(text)                                            from public;
 revoke all on function public.dbmerge_logout(text)                                        from public;
 revoke all on function public.dbmerge_start_job(text, int, int, int, int, int, jsonb)    from public;
-revoke all on function public.dbmerge_add_rows(text, text, jsonb)                         from public;
-revoke all on function public.dbmerge_abort_job(text, text)                               from public;
 revoke all on function public.dbmerge_get_jobs(text)                                      from public;
-revoke all on function public.dbmerge_get_rows(text, text, int, int)                      from public;
 
 grant execute on function public.dbmerge_register(text, text, text, text)                 to anon, authenticated;
 grant execute on function public.dbmerge_login(text, text, text)                          to anon, authenticated;
 grant execute on function public.dbmerge_me(text)                                         to anon, authenticated;
 grant execute on function public.dbmerge_logout(text)                                     to anon, authenticated;
 grant execute on function public.dbmerge_start_job(text, int, int, int, int, int, jsonb) to anon, authenticated;
-grant execute on function public.dbmerge_add_rows(text, text, jsonb)                      to anon, authenticated;
-grant execute on function public.dbmerge_abort_job(text, text)                            to anon, authenticated;
 grant execute on function public.dbmerge_get_jobs(text)                                   to anon, authenticated;
-grant execute on function public.dbmerge_get_rows(text, text, int, int)                   to anon, authenticated;
