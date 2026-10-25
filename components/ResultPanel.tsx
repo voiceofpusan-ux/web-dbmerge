@@ -1,11 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { ProcessResult, RowRecord } from '@/types';
+import { ProcessResult, RowRecord, Session } from '@/types';
 import { exportExcel } from '@/lib/exporter';
-import { refreshSession } from '@/lib/license';
-import { saveJob } from '@/lib/db';
-import { isConfigured as dbConfigured } from '@/lib/supabase';
+import { refreshSession, isConfigured as licConfigured } from '@/lib/license';
+import { chargeExport } from '@/lib/db';
 
 interface Props {
   result: ProcessResult;
@@ -36,38 +35,45 @@ const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
 ];
 
 export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh }: Props) {
-  const [saving,   setSaving]   = useState(false);
-  const [dbSaving, setDbSaving] = useState(false);
-  const [dbProgress, setDbProgress] = useState(0);
-  const [dbSaved,  setDbSaved]  = useState(false);
+  const [step,    setStep]    = useState<'idle' | 'checking' | 'confirm' | 'downloading'>('idle');
+  const [session, setSession] = useState<Session | null>(null);
+  const [charged, setCharged] = useState(false);   // 이 결과로 이미 차감했으면 다시 받을 때 추가 차감 없음
+  const [notice,  setNotice]  = useState('');
 
   const { uniqueRows, allRows, stats } = result;
 
-  // 엑셀 파일로 저장 (2파일) — 라이선스 차감 없음, 로컬 다운로드
-  const handleSaveExcel = async () => {
-    setSaving(true);
-    try {
-      exportExcel(uniqueRows, allRows);
-    } finally {
-      setSaving(false);
-    }
+  // 엑셀받기 — 서버에서 최신 잔여건수를 받아 확인 창 표시 (Supabase 미설정 시 차감 없이 바로 받기)
+  const handleExcelClick = async () => {
+    if (!licConfigured) { exportExcel(uniqueRows, allRows); return; }
+    setStep('checking');
+    const s = await refreshSession();
+    onLicenseRefresh();
+    setSession(s);
+    setStep('confirm');
   };
 
-  // DB에 저장 — 건수 차감·환불은 서버에서 처리
-  const handleSaveDb = async () => {
-    if (!dbConfigured) { alert('Supabase가 설정되지 않았습니다.'); return; }
-    setDbSaving(true);
-    setDbProgress(0);
-    setDbSaved(false);
+  // 확인 → 서버 차감(첫 회만) → 파일 다운로드
+  const handleConfirm = async () => {
+    setStep('downloading');
     try {
-      await saveJob(result, fileNames, setDbProgress);
-      setDbSaved(true);
+      if (!charged) {
+        await chargeExport(result, fileNames);
+        setCharged(true);
+      }
+      exportExcel(uniqueRows, allRows);
+      const s = await refreshSession();
+      onLicenseRefresh();
+      setNotice(
+        charged         ? '✓ 다시 받기 완료 · 추가 차감 없음'
+        : s?.is_admin   ? '✓ 엑셀받기 완료 · 슈퍼어드민(차감 없음)'
+        : `✓ 엑셀받기 완료 · ${stats.unique.toLocaleString()}건 차감 · 잔여 ${s ? (s.quota - s.used).toLocaleString() : '-'}건`,
+      );
     } catch (e: unknown) {
-      alert(`DB 저장 오류: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      setDbSaving(false);
+      alert(`엑셀받기 오류: ${e instanceof Error ? e.message : e}`);
       await refreshSession();
       onLicenseRefresh();
+    } finally {
+      setStep('idle');
     }
   };
 
@@ -120,25 +126,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
         )}
       </div>
 
-      {/* DB 저장 진행바 */}
-      {dbSaving && (
-        <div className="space-y-1">
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>DB 저장 중...</span>
-            <span>{Math.round(dbProgress)}%</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div
-              className="bg-blue-500 h-2 rounded-full transition-all duration-200"
-              style={{ width: `${dbProgress}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {dbSaved && (
-        <p className="text-sm text-green-600 font-medium">✓ DB 저장 완료</p>
-      )}
+      {notice && <p className="text-sm text-green-600 font-medium">{notice}</p>}
 
       {/* 액션 버튼 */}
       <div className="flex gap-3 justify-end">
@@ -149,24 +137,117 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
           다시 작업
         </button>
 
-        {dbConfigured && (
-          <button
-            onClick={handleSaveDb}
-            disabled={dbSaving || dbSaved}
-            className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 font-medium"
-          >
-            {dbSaving ? `저장 중... ${Math.round(dbProgress)}%` : dbSaved ? '저장됨 ✓' : 'DB 저장'}
-          </button>
-        )}
-
         <button
-          onClick={handleSaveExcel}
-          disabled={saving}
+          onClick={handleExcelClick}
+          disabled={step !== 'idle'}
           className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
         >
-          {saving ? '저장 중...' : '엑셀 저장'}
+          {step === 'checking' ? '확인 중...' : step === 'downloading' ? '받는 중...' : '엑셀받기'}
         </button>
       </div>
+
+      {(step === 'confirm' || step === 'downloading') && (
+        <ExportDialog
+          count={stats.unique}
+          errorCount={stats.error}
+          session={session}
+          charged={charged}
+          busy={step === 'downloading'}
+          onConfirm={handleConfirm}
+          onCancel={() => setStep('idle')}
+        />
+      )}
+    </div>
+  );
+}
+
+const EXPORT_NOTICES = [
+  '엑셀받기를 누르면 서버가 잔여 건수를 확인하고 정제결과 건수만큼 차감한 뒤 파일을 내려줍니다. 건수가 모자라면 받을 수 없습니다.',
+  '서버에는 사용 기록만 남습니다(날짜, 파일명, 건수). 연락처 행은 저장하지 않습니다.',
+  '같은 결과를 다시 받을 때는 추가로 차감하지 않습니다. "다시 작업"으로 새로 처리하면 다시 차감됩니다.',
+  '이력 화면은 "사용 이력"(언제 몇 건 차감됐는지)만 보여 줍니다.',
+];
+
+/** 엑셀받기 확인 창 — 이번 차감 건수와 잔여건수, 안내 문구 표시 */
+function ExportDialog({ count, errorCount, session, charged, busy, onConfirm, onCancel }: {
+  count: number;
+  errorCount: number;
+  session: Session | null;
+  charged: boolean;
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const remaining = session ? session.quota - session.used : 0;
+  const isAdmin   = !!session?.is_admin;
+  const lacking   = !charged && !isAdmin && remaining < count;
+  const blocked   = !session || lacking;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={busy ? undefined : onCancel}>
+      <div className="bg-white rounded-xl shadow-2xl w-[380px] p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-gray-800">엑셀받기</h2>
+
+        {!session ? (
+          <p className="text-sm text-red-600">로그인이 필요합니다. 다시 로그인한 뒤 시도하세요.</p>
+        ) : charged ? (
+          <p className="text-sm text-gray-600">이미 건수가 차감된 결과입니다. 다시 받아도 추가로 차감되지 않습니다.</p>
+        ) : (
+          <div className="border rounded-lg p-4 bg-gray-50 space-y-2 text-sm">
+            <Row label="이번 차감" value={isAdmin ? '0건 (슈퍼어드민)' : `${count.toLocaleString()}건`} strong />
+            {!isAdmin && errorCount > 0 && (
+              <p className="text-xs text-gray-400 text-right">정제결과 기준 · 오류번호 {errorCount.toLocaleString()}건 포함</p>
+            )}
+            {!isAdmin && (
+              <>
+                <Row label="현재 잔여" value={`${remaining.toLocaleString()}건`} />
+                <div className="border-t pt-2">
+                  <Row
+                    label="차감 후 잔여"
+                    value={lacking ? `${(count - remaining).toLocaleString()}건 부족` : `${(remaining - count).toLocaleString()}건`}
+                    strong
+                    color={lacking ? 'text-red-600' : 'text-green-600'}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {lacking && (
+          <p className="text-xs text-red-500">잔여 건수가 부족합니다. 관리자에게 충전을 요청하세요.</p>
+        )}
+
+        <ul className="text-xs text-gray-500 space-y-1 list-disc pl-4">
+          {EXPORT_NOTICES.map((t) => <li key={t}>{t}</li>)}
+        </ul>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="flex-1 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+          >
+            취소
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy || blocked}
+            className="flex-1 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 font-medium"
+          >
+            {busy ? '받는 중...' : charged ? '다시 받기' : isAdmin ? '받기' : `${count.toLocaleString()}건 차감하고 받기`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, strong, color }: { label: string; value: string; strong?: boolean; color?: string }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-gray-500">{label}</span>
+      <span className={`${strong ? 'font-semibold' : ''} ${color ?? 'text-gray-800'}`}>{value}</span>
     </div>
   );
 }

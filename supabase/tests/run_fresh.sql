@@ -9,6 +9,8 @@
 \ir ../00_schema.sql
 \ir ../01_rpc_functions.sql
 \ir ../02_lockdown.sql
+\ir ../03_remove_row_storage.sql
+\ir ../03_remove_row_storage.sql
 \ir 10_seed.sql
 \ir 20_rpc_test.sql
 

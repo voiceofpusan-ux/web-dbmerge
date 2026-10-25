@@ -70,7 +70,7 @@ export default function Home() {
           )}
           {dbConfigured && (
             <Link href="/history" className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50">
-              작업 이력
+              사용 이력
             </Link>
           )}
           <button

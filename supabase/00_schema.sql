@@ -31,30 +31,5 @@ create table if not exists public.dbmerge_jobs (
 );
 create index if not exists dbmerge_jobs_user_id_idx on public.dbmerge_jobs (user_id, created_at desc);
 
-create table if not exists public.dbmerge_rows (
-  id          uuid primary key default gen_random_uuid(),
-  job_id      uuid not null references public.dbmerge_jobs (id) on delete cascade,
-  user_id     text not null,
-  grp         text,
-  name        text,
-  orig_name   text,
-  name_remark text,
-  long_name   text,
-  phone       text,
-  fixed_phone text,
-  memo        text,
-  orig_phone  text,
-  source      text,
-  remark      text,
-  address     text,
-  party_type  text,
-  note1       text,
-  note2       text,
-  note3       text,
-  note4       text,
-  note5       text
-);
-
 alter table public.dbmerge_licenses enable row level security;
 alter table public.dbmerge_jobs     enable row level security;
-alter table public.dbmerge_rows     enable row level security;

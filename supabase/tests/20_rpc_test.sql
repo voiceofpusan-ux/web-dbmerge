@@ -1,10 +1,10 @@
--- 2단계(lockdown) 적용 후 anon 역할로 RPC 동작과 테이블 차단을 검증
+-- 02(lockdown)·03(행 저장 제거) 적용 후 anon 역할로 RPC 동작과 테이블 차단을 검증
 
 set role anon;
 
 -- ── 테이블 직접 접근 차단 ─────────────────────────────────────
 select test.err('select * from dbmerge_licenses', 'permission denied', '라이선스 테이블 직접 조회 차단');
-select test.err('select * from dbmerge_rows', 'permission denied', '연락처 행 직접 조회 차단');
+select test.err('select * from dbmerge_jobs', 'permission denied', '사용 기록 직접 조회 차단');
 select test.err($$update dbmerge_licenses set quota = 999999$$, 'permission denied', 'quota 직접 수정 차단');
 select test.err('select * from dbmerge_sessions', 'permission denied', '세션 테이블 직접 조회 차단');
 select test.err($$select _dbmerge_auth('x')$$, 'permission denied', '내부 함수 호출 차단');
@@ -37,44 +37,33 @@ select test.ok((:'reg'::jsonb -> 'profile' ->> 'quota')::int = 300 and (:'reg'::
 select test.err($$select dbmerge_register('또', '01055556666', 'newpass1', 'm9')$$, '이미 등록된', '중복 전화번호 가입 거부');
 select test.err($$select dbmerge_register('짧', '01077778888', '123', 'm9')$$, '6자 이상', '짧은 비밀번호 거부');
 
--- ── 건수 차감과 저장 ──────────────────────────────────────────
+-- ── 엑셀받기 건수 차감 (dbmerge_start_job = 차감 + 사용 기록) ──
 select test.err(format($$select dbmerge_start_job(%L, 500, 400, 0, 0, 0, '["a.xlsx"]')$$, :'t_new'),
                 '잔여 건수가 부족', '잔여 건수 초과 시 거부');
 select test.ok((dbmerge_me(:'t_new') ->> 'used')::int = 0, '거부 시 차감 없음');
 
 select dbmerge_start_job(:'t_new', 5, 3, 2, 0, 0, '["a.xlsx", "b.csv"]') as job \gset
-select test.ok((dbmerge_me(:'t_new') ->> 'used')::int = 3, '작업 시작 → 3건 차감');
+select test.ok((dbmerge_me(:'t_new') ->> 'used')::int = 3, '엑셀받기 → 3건 차감');
+select dbmerge_start_job(:'t_new', 297, 297, 0, 0, 0, '[]') as job2 \gset
+select test.ok((dbmerge_me(:'t_new') ->> 'used')::int = 300, '잔여 건수를 정확히 다 쓰는 것은 허용');
+select test.err(format($$select dbmerge_start_job(%L, 1, 1, 0, 0, 0, '[]')$$, :'t_new'),
+                '잔여 건수가 부족', '다 쓴 뒤에는 거부');
 
-select test.ok(dbmerge_add_rows(:'t_new', :'job',
-  '[{"name":"홍길동","fixed_phone":"010-1111-2222","party_type":"권리당원","job_id":"00000000-0000-0000-0000-000000000000","user_id":"hacker"},
-    {"name":"김철수","fixed_phone":"010-3333-4444"}]') = 2, '행 2개 저장');
-select test.err(format($$select dbmerge_add_rows(%L, %L, '[{"name":"a"},{"name":"b"}]')$$, :'t_new', :'job'),
-                '많은 행', '차감한 건수보다 많이 저장 거부');
+-- 사용 이력
+select test.ok((select count(*) from dbmerge_get_jobs(:'t_new')) = 2, '내 사용 이력 조회');
+select test.ok((select count(*) from dbmerge_get_jobs(:'t_old')) = 0, '남의 사용 이력은 안 보임');
+select test.ok((select file_names = array['a.xlsx', 'b.csv'] from dbmerge_get_jobs(:'t_new') where id::text = :'job'), '파일명 기록');
 
--- 다른 사용자는 내 작업에 접근 불가
-select test.err(format($$select dbmerge_add_rows(%L, %L, '[{"name":"x"}]')$$, :'t_old', :'job'), '찾을 수 없습니다', '남의 작업에 행 추가 거부');
-select test.err(format($$select * from dbmerge_get_rows(%L, %L, 0, 100)$$, :'t_old', :'job'), '찾을 수 없습니다', '남의 작업 행 조회 거부');
-select test.err(format($$select dbmerge_abort_job(%L, %L)$$, :'t_old', :'job'), '찾을 수 없습니다', '남의 작업 취소 거부');
-select test.ok((select count(*) from dbmerge_get_jobs(:'t_old')) = 0, '남의 작업은 이력에 안 보임');
-
-select test.ok((select count(*) from dbmerge_get_jobs(:'t_new')) = 1, '내 작업 이력 조회');
-select test.ok((select file_names = array['a.xlsx', 'b.csv'] from dbmerge_get_jobs(:'t_new')), '파일명 배열 저장');
-select test.ok((select count(*) from dbmerge_get_rows(:'t_new', :'job', 0, 1)) = 1
-           and (select count(*) from dbmerge_get_rows(:'t_new', :'job', 1, 1)) = 1
-           and (select count(*) from dbmerge_get_rows(:'t_new', :'job', 2, 1)) = 0, '행 페이지 조회');
-select test.ok((select count(*) from dbmerge_get_rows(:'t_new', :'job', 0, 100)
-                where job_id::text = :'job' and user_id <> 'hacker') = 2, '요청 JSON의 job_id·user_id는 무시');
-select test.ok((select party_type from dbmerge_get_rows(:'t_new', :'job', 0, 100) where name = '홍길동') = '권리당원', '컬럼 값 저장');
-
--- 저장 실패 시 취소 → 삭제 + 환불
-select dbmerge_abort_job(:'t_new', :'job');
-select test.ok((select count(*) from dbmerge_get_jobs(:'t_new')) = 0, '취소 → 작업 삭제');
-select test.ok((dbmerge_me(:'t_new') ->> 'used')::int = 0, '취소 → 차감 건수 환불');
+-- 연락처 행 저장 기능은 제거됨 (03_remove_row_storage.sql)
+select test.err(format($$select dbmerge_add_rows(%L, %L, '[{"name":"x"}]')$$, :'t_new', :'job'), 'does not exist', '행 저장 함수 없음');
+select test.err(format($$select * from dbmerge_get_rows(%L, %L, 0, 100)$$, :'t_new', :'job'), 'does not exist', '행 조회 함수 없음');
+select test.err(format($$select dbmerge_abort_job(%L, %L)$$, :'t_new', :'job'), 'does not exist', '작업 취소 함수 없음');
+select test.ok(to_regclass('public.dbmerge_rows') is null, '연락처 행 테이블 없음');
 
 -- ── 관리자 ────────────────────────────────────────────────────
 select dbmerge_login('01099990000', 'admin123', 'any') ->> 'token' as t_admin \gset
 select dbmerge_start_job(:'t_admin', 10, 10, 0, 0, 0, '[]') as job_admin \gset
-select test.ok((dbmerge_me(:'t_admin') ->> 'used')::int = 0, '관리자는 quota 0이어도 차감 없이 저장');
+select test.ok((dbmerge_me(:'t_admin') ->> 'used')::int = 0, '관리자는 quota 0이어도 차감 없음');
 
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;

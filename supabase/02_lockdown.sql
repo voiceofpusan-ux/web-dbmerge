@@ -18,7 +18,6 @@ end $$;
 
 alter table public.dbmerge_licenses enable row level security;
 alter table public.dbmerge_jobs     enable row level security;
-alter table public.dbmerge_rows     enable row level security;
 
 -- RLS만으로는 PATCH가 0건 성공(200)으로 보일 수 있어 권한 자체도 회수 → 명확한 권한 오류
-revoke all on public.dbmerge_licenses, public.dbmerge_jobs, public.dbmerge_rows from anon, authenticated;
+revoke all on public.dbmerge_licenses, public.dbmerge_jobs from anon, authenticated;
