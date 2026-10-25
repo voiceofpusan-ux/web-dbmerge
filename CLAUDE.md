@@ -200,8 +200,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 ```
 
 ## Supabase 프로젝트
-- 기존 프로젝트(`dtfckunvcjrotqtsyrjs`)는 삭제됨 (2026-10). 새 프로젝트를 만들면 URL을 여기에 기록
-- Region: Northeast Asia (Seoul) 권장
+- URL: https://vzqxhnjeurbgneaaqgvo.supabase.co (프로젝트명 `문자관련`, 2026-10 생성, Free 플랜)
+- Region: Northeast Asia (Seoul)
+- 이전 프로젝트(`dtfckunvcjrotqtsyrjs`)는 삭제됨
 
 ## 배포
 - **GitHub**: `voiceofpusan-ux/web-dbmerge`
