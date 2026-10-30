@@ -17,11 +17,12 @@ select test.err($$select dbmerge_login('01033334444', 'pass1234', 'm1')$$, '차�
 select dbmerge_login('01011112222', 'pass1234', 'm1') ->> 'token' as t_old \gset
 select test.ok(length(:'t_old') = 64, '기존 SHA-256 계정 로그인 → 토큰 발급');
 select test.ok((dbmerge_me(:'t_old') ->> 'quota')::int = 1000, '토큰으로 내 정보 조회');
-select test.err($$select dbmerge_login('01011112222', 'pass1234', 'm2')$$, '다른 기기', '다른 기기 로그인 거부');
+select test.err($$select dbmerge_login('01011112222', 'pass1234', 'm2')$$, '컴퓨터 수(1대)', '기본 1대 → 다른 컴퓨터 로그인 거부');
 
 reset role;
-select test.ok(password like '$2%' and machine_id = 'm1', '로그인 후 bcrypt 교체 + 기기 등록')
-from dbmerge_licenses where phone = '01011112222';
+select test.ok(password like '$2%', '로그인 후 bcrypt 교체') from dbmerge_licenses where phone = '01011112222';
+select test.ok((select array_agg(d.machine_id) from dbmerge_devices d join dbmerge_licenses l on l.id::text = d.license_id
+                where l.phone = '01011112222') = array['m1'], '첫 로그인 기기 등록');
 set role anon;
 
 select dbmerge_login('01011112222', 'pass1234', 'm1') ->> 'token' as t_old2 \gset
@@ -64,6 +65,32 @@ select test.ok(to_regclass('public.dbmerge_rows') is null, '연락처 행 테이
 select dbmerge_login('01099990000', 'admin123', 'any') ->> 'token' as t_admin \gset
 select dbmerge_start_job(:'t_admin', 10, 10, 0, 0, 0, '[]') as job_admin \gset
 select test.ok((dbmerge_me(:'t_admin') ->> 'used')::int = 0, '관리자는 quota 0이어도 차감 없음');
+
+-- ── 접속 가능 컴퓨터 수 ───────────────────────────────────────
+-- 이전 방식(machine_id 1개)으로 등록된 기기는 그대로 인정
+select dbmerge_login('01022223333', 'pass1234', 'legacy-pc') ->> 'token' as t_dev1 \gset
+select test.ok(length(:'t_dev1') = 64, '이전에 등록된 기기로 로그인');
+select test.err($$select dbmerge_login('01022223333', 'pass1234', 'pc-2')$$, '컴퓨터 수(1대)', '두 번째 컴퓨터 거부');
+
+reset role;
+select test.ok((select machine_id from dbmerge_licenses where phone = '01022223333') = '', '이전 machine_id 칸은 비워짐');
+update dbmerge_licenses set max_devices = 2 where phone = '01022223333';   -- 관리자 콘솔에서 2대로 변경
+set role anon;
+select dbmerge_login('01022223333', 'pass1234', 'pc-2') ->> 'token' as t_dev2 \gset
+select test.ok(length(:'t_dev2') = 64, '2대로 늘리면 두 번째 컴퓨터 등록');
+select test.err($$select dbmerge_login('01022223333', 'pass1234', 'pc-3')$$, '컴퓨터 수(2대)', '세 번째 컴퓨터 거부');
+select test.ok((dbmerge_me(:'t_dev1') ->> 'name') = '기기', '등록된 기기의 기존 세션 유지');
+
+reset role;
+delete from dbmerge_devices where machine_id = 'legacy-pc';   -- 관리자 콘솔에서 기기 해제
+set role anon;
+select test.err(format($$select dbmerge_me(%L)$$, :'t_dev1'), '해제된 기기', '해제된 기기의 세션은 즉시 무효');
+select test.ok((dbmerge_me(:'t_dev2') ->> 'name') = '기기', '다른 기기 세션은 유지');
+select dbmerge_login('01022223333', 'pass1234', 'pc-3') ->> 'token' as t_dev3 \gset
+select test.ok(length(:'t_dev3') = 64, '해제로 빈 자리에 새 컴퓨터 등록');
+select test.err($$select dbmerge_login('01022223333', 'pass1234', '')$$, '기기 정보', '기기 정보 없으면 거부');
+select test.err('select * from dbmerge_devices', 'permission denied', '기기 목록 직접 조회 차단');
+select test.err($$select _dbmerge_use_device(null, 'x')$$, 'permission denied', '기기 등록 내부 함수 호출 차단');
 
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;

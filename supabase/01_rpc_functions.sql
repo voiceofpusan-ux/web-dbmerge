@@ -13,8 +13,30 @@ create table if not exists public.dbmerge_sessions (
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '30 days'
 );
+-- 세션이 만들어진 기기. 관리자가 기기를 해제하면 그 기기의 세션도 무효가 됨
+alter table public.dbmerge_sessions add column if not exists machine_id text not null default '';
 alter table public.dbmerge_sessions enable row level security;
 revoke all on public.dbmerge_sessions from anon, authenticated;
+
+-- ── 기기 (계정별 접속 가능 컴퓨터) ────────────────────────────
+-- 최대 대수는 관리자 콘솔에서 계정별로 설정 (기본 1대)
+alter table public.dbmerge_licenses add column if not exists max_devices integer not null default 1;
+
+create table if not exists public.dbmerge_devices (
+  license_id text not null,
+  machine_id text not null,
+  first_seen timestamptz not null default now(),
+  last_seen  timestamptz not null default now(),
+  primary key (license_id, machine_id)
+);
+alter table public.dbmerge_devices enable row level security;
+revoke all on public.dbmerge_devices from anon, authenticated;
+
+-- 이전 방식(계정당 machine_id 1개)으로 등록된 기기를 옮긴 뒤 비움 (반복 실행해도 안전)
+insert into public.dbmerge_devices (license_id, machine_id)
+select id::text, machine_id from public.dbmerge_licenses where coalesce(machine_id, '') <> ''
+on conflict do nothing;
+update public.dbmerge_licenses set machine_id = '' where coalesce(machine_id, '') <> '';
 
 -- ── 내부 함수 (anon 호출 불가) ────────────────────────────────
 
@@ -38,7 +60,8 @@ as $$
   )
 $$;
 
-create or replace function public._dbmerge_new_session(p_license_id text)
+drop function if exists public._dbmerge_new_session(text);
+create or replace function public._dbmerge_new_session(p_license_id text, p_machine_id text)
 returns jsonb
 language plpgsql security definer
 set search_path = public, extensions
@@ -47,9 +70,38 @@ declare
   v_token text := encode(gen_random_bytes(32), 'hex');
 begin
   delete from dbmerge_sessions where expires_at < now();
-  insert into dbmerge_sessions (token_hash, license_id)
-  values (_dbmerge_token_hash(v_token), p_license_id);
+  insert into dbmerge_sessions (token_hash, license_id, machine_id)
+  values (_dbmerge_token_hash(v_token), p_license_id, coalesce(p_machine_id, ''));
   return to_jsonb(v_token);
+end $$;
+
+-- 일반 사용자 기기 확인: 등록된 기기면 접속 시각 갱신, 새 기기면 최대 대수 안에서만 등록
+create or replace function public._dbmerge_use_device(v public.dbmerge_licenses, p_machine_id text)
+returns void
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  mid text := coalesce(p_machine_id, '');
+  n   int;
+  lim int;
+begin
+  if mid = '' then
+    raise exception '기기 정보를 확인할 수 없습니다. 브라우저를 새로고침한 뒤 다시 시도하세요.';
+  end if;
+
+  update dbmerge_devices set last_seen = now() where license_id = v.id::text and machine_id = mid;
+  if found then
+    return;
+  end if;
+
+  -- 같은 계정으로 동시에 새 기기 등록 시 대수를 넘지 않도록 계정 행을 잠그고 최신 최대 대수를 읽음
+  select coalesce(max_devices, 1) into lim from dbmerge_licenses where id = v.id for update;
+  select count(*) into n from dbmerge_devices where license_id = v.id::text;
+  if n >= lim then
+    raise exception E'등록 가능한 컴퓨터 수(%대)를 초과했습니다.\n다른 컴퓨터에서 쓰려면 관리자에게 기기 해제를 요청하세요.', lim;
+  end if;
+  insert into dbmerge_devices (license_id, machine_id) values (v.id::text, mid);
 end $$;
 
 -- 토큰으로 사용자 확인. 실패 시 errcode 28000 (앱에서 로그아웃 처리)
@@ -59,19 +111,30 @@ language plpgsql security definer
 set search_path = public, extensions
 as $$
 declare
-  v dbmerge_licenses;
+  v   dbmerge_licenses;
+  mid text;
 begin
-  select l.* into v
+  select s.machine_id into mid
   from dbmerge_sessions s
-  join dbmerge_licenses l on l.id::text = s.license_id
   where s.token_hash = _dbmerge_token_hash(p_token)
     and s.expires_at > now();
+  if found then
+    select l.* into v
+    from dbmerge_sessions s
+    join dbmerge_licenses l on l.id::text = s.license_id
+    where s.token_hash = _dbmerge_token_hash(p_token);
+  end if;
 
-  if not found then
+  if v.id is null then
     raise exception '로그인이 필요합니다.' using errcode = '28000';
   end if;
   if v.status = 'blocked' then
     raise exception '사용이 차단된 계정입니다. 관리자에게 문의하세요.' using errcode = '28000';
+  end if;
+  -- 관리자가 해제한 기기의 세션은 무효 (슈퍼어드민 제외)
+  if not coalesce(v.is_admin, false)
+     and not exists (select 1 from dbmerge_devices where license_id = v.id::text and machine_id = mid) then
+    raise exception '등록이 해제된 기기입니다. 다시 로그인하세요.' using errcode = '28000';
   end if;
   return v;
 end $$;
@@ -98,11 +161,12 @@ begin
     raise exception '이미 등록된 전화번호입니다.';
   end if;
 
-  insert into dbmerge_licenses (name, phone, password, machine_id, is_admin, status, quota, used, charge_count)
-  values (p_name, p_phone, crypt(p_password, gen_salt('bf')), coalesce(p_machine_id, ''), false, 'active', 300, 0, 0)
+  insert into dbmerge_licenses (name, phone, password, is_admin, status, quota, used, charge_count)
+  values (p_name, p_phone, crypt(p_password, gen_salt('bf')), false, 'active', 300, 0, 0)
   returning * into v;
+  perform _dbmerge_use_device(v, p_machine_id);
 
-  return jsonb_build_object('token', _dbmerge_new_session(v.id::text), 'profile', _dbmerge_profile(v));
+  return jsonb_build_object('token', _dbmerge_new_session(v.id::text, p_machine_id), 'profile', _dbmerge_profile(v));
 end $$;
 
 create or replace function public.dbmerge_login(p_phone text, p_password text, p_machine_id text)
@@ -135,22 +199,17 @@ begin
   end if;
 
   -- 슈퍼어드민은 기기 제한 없음
-  if not coalesce(v.is_admin, false)
-     and coalesce(v.machine_id, '') <> ''
-     and v.machine_id <> coalesce(p_machine_id, '') then
-    raise exception E'다른 기기에서 등록된 계정입니다.\n기기 변경이 필요하면 관리자에게 기기 초기화를 요청하세요.';
+  if not coalesce(v.is_admin, false) then
+    perform _dbmerge_use_device(v, p_machine_id);
   end if;
 
-  update dbmerge_licenses set
-    -- 기존 SHA-256 해시는 bcrypt로 교체
-    password   = case when v.password like '$2%' then password else crypt(p_password, gen_salt('bf')) end,
-    -- 최초 로그인 또는 기기 초기화 후 첫 로그인 → 현재 기기 등록
-    machine_id = case when not coalesce(v.is_admin, false) and coalesce(v.machine_id, '') = ''
-                      then coalesce(p_machine_id, '') else machine_id end
-  where id = v.id
-  returning * into v;
+  -- 기존 SHA-256 해시는 bcrypt로 교체
+  if v.password not like '$2%' then
+    update dbmerge_licenses set password = crypt(p_password, gen_salt('bf')) where id = v.id
+    returning * into v;
+  end if;
 
-  return jsonb_build_object('token', _dbmerge_new_session(v.id::text), 'profile', _dbmerge_profile(v));
+  return jsonb_build_object('token', _dbmerge_new_session(v.id::text, p_machine_id), 'profile', _dbmerge_profile(v));
 end $$;
 
 create or replace function public.dbmerge_me(p_token text)
@@ -233,7 +292,8 @@ end $$;
 -- Supabase는 새 함수를 anon에게 기본 허용하므로 내부 함수는 명시적으로 회수
 revoke all on function public._dbmerge_token_hash(text)                          from public, anon, authenticated;
 revoke all on function public._dbmerge_profile(public.dbmerge_licenses)          from public, anon, authenticated;
-revoke all on function public._dbmerge_new_session(text)                         from public, anon, authenticated;
+revoke all on function public._dbmerge_new_session(text, text)                   from public, anon, authenticated;
+revoke all on function public._dbmerge_use_device(public.dbmerge_licenses, text) from public, anon, authenticated;
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;

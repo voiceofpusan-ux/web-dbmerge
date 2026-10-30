@@ -9,7 +9,8 @@ create table if not exists public.dbmerge_licenses (
   phone         text not null unique,
   password      text not null,
   computer_name text,
-  machine_id    text not null default '',
+  machine_id    text not null default '',   -- 이전 방식(1대) 호환용. 기기 목록은 dbmerge_devices
+  max_devices   integer not null default 1,
   is_admin      boolean not null default false,
   status        text not null default 'active' check (status in ('pending', 'active', 'blocked')),
   quota         integer not null default 300,
