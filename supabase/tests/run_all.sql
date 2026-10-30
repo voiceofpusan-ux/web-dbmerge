@@ -14,7 +14,7 @@
 
 -- 1단계만 적용한 상태에서는 기존 앱(테이블 직접 접근)이 계속 동작해야 함
 set role anon;
-select test.ok((select count(*) from dbmerge_licenses) = 3, '1단계 후에도 기존 앱 직접 조회 동작');
+select test.ok((select count(*) from dbmerge_licenses) = 4, '1단계 후에도 기존 앱 직접 조회 동작');
 reset role;
 
 \ir ../02_lockdown.sql

@@ -30,4 +30,6 @@ grant execute on all functions in schema test to anon;
 insert into dbmerge_licenses (phone, name, password, quota, used, is_admin, status, machine_id) values
   ('01011112222', '기존', encode(sha256(convert_to('01011112222' || 'pass1234', 'UTF8')), 'hex'), 1000, 0, false, 'active',  ''),
   ('01099990000', '관리', encode(sha256(convert_to('01099990000' || 'admin123', 'UTF8')), 'hex'),    0, 0, true,  'active',  ''),
-  ('01033334444', '차단', encode(sha256(convert_to('01033334444' || 'pass1234', 'UTF8')), 'hex'), 1000, 0, false, 'blocked', '');
+  ('01033334444', '차단', encode(sha256(convert_to('01033334444' || 'pass1234', 'UTF8')), 'hex'), 1000, 0, false, 'blocked', ''),
+  -- 이전 방식으로 기기 1대가 등록된 계정 (01 적용 시 dbmerge_devices로 옮겨져야 함)
+  ('01022223333', '기기', encode(sha256(convert_to('01022223333' || 'pass1234', 'UTF8')), 'hex'), 1000, 0, false, 'active',  'legacy-pc');
