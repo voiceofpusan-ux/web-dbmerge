@@ -157,6 +157,11 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
   - 로그인 시 등록된 기기면 통과, 새 기기는 최대 대수 안에서만 등록 (슈퍼어드민은 제한 없음)
   - 관리자가 `dbmerge_devices` 행을 지우면 그 기기의 세션은 즉시 무효 → 앱이 자동 로그아웃
   - 이전 방식(`dbmerge_licenses.machine_id` 1개)은 01 실행 시 `dbmerge_devices`로 옮기고 비움
+- DB 저장(주소록 보관): `dbmerge_licenses.can_store`(기본 false, 관리자 콘솔에서 켬) → profile의 `can_store`
+  - `dbmerge_books`: 업로드 묶음(파일명·건수·저장일·만료일). `expires_at` 기본 저장일 + 10일, 관리자 콘솔 달력으로 묶음별 변경
+  - `dbmerge_book_rows`: 묶음의 연락처(`fixed_phone` 기준 비교). 묶음 삭제 시 함께 삭제(on delete cascade)
+  - `dbmerge_purge_expired()`: 만료 묶음 삭제. pg_cron이 켜져 있으면 매일 03:00(KST) 예약 실행
+  - 권한을 꺼도 이미 보관된 데이터는 만료일까지 남음 (관리자가 즉시 삭제 가능)
 - 비밀번호: bcrypt. 기존 SHA-256(전화번호+비밀번호) 해시는 로그인 성공 시 bcrypt로 교체
 - localStorage 세션은 화면 표시용. 권한·잔여건수는 항상 서버에서 판단
 - SQL 테스트 (로컬 Postgres, 빈 DB)
@@ -174,6 +179,7 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | computer_name | User-Agent |
 | machine_id | (이전 방식, 사용 안 함) 01 실행 시 `dbmerge_devices`로 이전 |
 | max_devices | 접속 가능 컴퓨터 수 (기본 1, 관리자 콘솔에서 설정) |
+| can_store | DB 저장(주소록 정리) 권한 (기본 false, 관리자 콘솔에서 설정) |
 | status | `pending` / `active` / `blocked` |
 | password | bcrypt 해시 (기존 계정은 첫 로그인 전까지 SHA-256) |
 | is_admin | 슈퍼어드민 (건수 차감·기기 제한 없음) |
@@ -213,6 +219,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 - 로컬 경로: `E:/github/admin/index.html`
 - DB통합정제 탭: Supabase `dbmerge_licenses` 사용자 관리 (충전/차단/PW초기화/기기관리)
   - 기기관리: 최대 대수(`max_devices`) 저장, `dbmerge_devices` 목록 조회·기기별/전체 해제
+  - 보관관리: DB 저장 권한(`can_store`) 켜기/끄기, `dbmerge_books` 묶음별 만료일(달력) 변경·삭제
   - `02_lockdown.sql` 적용 후에는 anon 키가 아니라 **service_role 키**로 연결해야 함
 - 작업이력 탭: `dbmerge_rows`(연락처 행)는 삭제됨. `dbmerge_jobs`(사용 기록)만 남아 있음
   - Supabase URL/Key는 브라우저 localStorage에 저장
