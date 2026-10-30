@@ -92,6 +92,32 @@ select test.err($$select dbmerge_login('01022223333', 'pass1234', '')$$, '기기
 select test.err('select * from dbmerge_devices', 'permission denied', '기기 목록 직접 조회 차단');
 select test.err($$select _dbmerge_use_device(null, 'x')$$, 'permission denied', '기기 등록 내부 함수 호출 차단');
 
+-- ── DB 저장 권한·보관 기간 ────────────────────────────────────
+select test.ok((dbmerge_me(:'t_dev2') ->> 'can_store')::boolean = false, 'DB 저장 권한 기본값 꺼짐');
+reset role;
+update dbmerge_licenses set can_store = true where phone = '01022223333';   -- 관리자 콘솔에서 권한 켬
+set role anon;
+select test.ok((dbmerge_me(:'t_dev2') ->> 'can_store')::boolean = true, '권한을 켜면 내 정보에 반영');
+select test.err('select * from dbmerge_books', 'permission denied', '보관 묶음 직접 조회 차단');
+select test.err('select * from dbmerge_book_rows', 'permission denied', '보관 연락처 직접 조회 차단');
+select test.err('select dbmerge_purge_expired()', 'permission denied', '만료 삭제 함수 호출 차단');
+
+reset role;
+insert into dbmerge_books (id, license_id, file_name, row_count, expires_at) values
+  ('00000000-0000-0000-0000-0000000000b1', 'L1', '지난주.xlsx', 2, now() - interval '1 minute'),
+  ('00000000-0000-0000-0000-0000000000b2', 'L1', '오늘.xlsx',   1, default);
+insert into dbmerge_book_rows (book_id, license_id, fixed_phone) values
+  ('00000000-0000-0000-0000-0000000000b1', 'L1', '010-1111-0001'),
+  ('00000000-0000-0000-0000-0000000000b1', 'L1', '010-1111-0002'),
+  ('00000000-0000-0000-0000-0000000000b2', 'L1', '010-1111-0003');
+select test.ok((select expires_at::date - created_at::date from dbmerge_books where file_name = '오늘.xlsx') = 10, '보관 기간 기본 10일');
+select test.ok(dbmerge_purge_expired() = 1, '만료된 묶음 1개 삭제');
+select test.ok((select array_agg(fixed_phone) from dbmerge_book_rows) = array['010-1111-0003'], '만료 묶음의 연락처도 함께 삭제');
+update dbmerge_books set expires_at = now() - interval '1 second' where file_name = '오늘.xlsx';   -- 관리자가 달력으로 만료일을 앞당김
+select test.ok(dbmerge_purge_expired() = 1, '만료일을 바꾸면 그 기준으로 삭제');
+select test.ok((select count(*) from dbmerge_book_rows) = 0, '남은 보관 연락처 없음');
+set role anon;
+
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;
 update dbmerge_licenses set status = 'blocked' where phone = '01011112222';
