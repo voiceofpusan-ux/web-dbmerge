@@ -152,7 +152,11 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | `dbmerge_start_job` | 엑셀받기 때 `used + n <= quota` 조건으로 원자적 차감 + 사용 기록 생성 |
 | `dbmerge_get_jobs` | 내 사용 이력 조회 |
 
-- 세션: `dbmerge_sessions`에 토큰의 SHA-256만 저장, 30일 만료. 무효 토큰은 errcode `28000`
+- 세션: `dbmerge_sessions`에 토큰의 SHA-256과 기기(machine_id)만 저장, 30일 만료. 무효 토큰은 errcode `28000`
+- 접속 컴퓨터: `dbmerge_licenses.max_devices`(기본 1) + `dbmerge_devices`(계정별 기기 목록, 처음 등록·마지막 접속)
+  - 로그인 시 등록된 기기면 통과, 새 기기는 최대 대수 안에서만 등록 (슈퍼어드민은 제한 없음)
+  - 관리자가 `dbmerge_devices` 행을 지우면 그 기기의 세션은 즉시 무효 → 앱이 자동 로그아웃
+  - 이전 방식(`dbmerge_licenses.machine_id` 1개)은 01 실행 시 `dbmerge_devices`로 옮기고 비움
 - 비밀번호: bcrypt. 기존 SHA-256(전화번호+비밀번호) 해시는 로그인 성공 시 bcrypt로 교체
 - localStorage 세션은 화면 표시용. 권한·잔여건수는 항상 서버에서 판단
 - SQL 테스트 (로컬 Postgres, 빈 DB)
@@ -168,7 +172,8 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | name | 사용자 이름 |
 | phone | 전화번호 |
 | computer_name | User-Agent |
-| machine_id | 기기 UUID (localStorage) |
+| machine_id | (이전 방식, 사용 안 함) 01 실행 시 `dbmerge_devices`로 이전 |
+| max_devices | 접속 가능 컴퓨터 수 (기본 1, 관리자 콘솔에서 설정) |
 | status | `pending` / `active` / `blocked` |
 | password | bcrypt 해시 (기존 계정은 첫 로그인 전까지 SHA-256) |
 | is_admin | 슈퍼어드민 (건수 차감·기기 제한 없음) |
@@ -180,7 +185,7 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 ### 동작 흐름
 1. 앱 시작 → localStorage 세션으로 헤더 잔여건수 표시
 2. `로그인` 버튼 → 회원가입(즉시 활성, 300건) 또는 로그인 → 서버가 세션 토큰 발급
-3. 관리자 콘솔 → DB통합정제 탭 → 충전·차단·기기초기화
+3. 관리자 콘솔 → DB통합정제 탭 → 충전·차단·PW초기화·기기관리(최대 대수·기기별 해제)
 4. 엑셀받기 시 서버가 정제결과 행 수(오류번호 포함)만큼 `used` 차감. 잔여 부족 시 다운로드 불가
 
 ### .env.local 설정 없을 경우
@@ -206,7 +211,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
 - URL: https://admin-james.netlify.app
 - 레포: `voiceofpusan-ux/admin-james`
 - 로컬 경로: `E:/github/admin/index.html`
-- DB통합정제 탭: Supabase `dbmerge_licenses` 사용자 관리 (충전/차단/PW·기기 초기화)
+- DB통합정제 탭: Supabase `dbmerge_licenses` 사용자 관리 (충전/차단/PW초기화/기기관리)
+  - 기기관리: 최대 대수(`max_devices`) 저장, `dbmerge_devices` 목록 조회·기기별/전체 해제
   - `02_lockdown.sql` 적용 후에는 anon 키가 아니라 **service_role 키**로 연결해야 함
 - 작업이력 탭: `dbmerge_rows`(연락처 행)는 삭제됨. `dbmerge_jobs`(사용 기록)만 남아 있음
   - Supabase URL/Key는 브라우저 localStorage에 저장
