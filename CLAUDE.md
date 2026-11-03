@@ -20,6 +20,8 @@ app/
     page.tsx          # 주소록 정리 (Workspace mode="book", DB 저장 권한 계정)
   contacts/
     page.tsx          # 내 주소록: DB 연락처 검색·필터·수정·그룹 일괄 변경·삭제
+  optouts/
+    page.tsx          # 수신거부 목록: 등록(붙여넣기·파일)·검색·해제
   history/
     page.tsx          # 사용 이력(엑셀받기 차감 기록) 조회 페이지
 components/
@@ -35,6 +37,7 @@ lib/
   exporter.ts         # xlsx 다운로드 (정제결과 위 + 중복 행 아래, 단일 시트)
   db.ts               # 엑셀받기 건수 차감(chargeExport) + 사용 이력 조회
   book.ts             # 주소록 서버 호출 (정리: findExisting / saveBook / deleteBookRows, 내 주소록: searchBook / bookFacets / updateBookRow / setBookGroup)
+  optout.ts           # 수신거부 서버 호출 (addOptouts / listOptouts / deleteOptouts / checkOptouts)
   license.ts          # Supabase 라이선스 조회/등록/차감
   supabase.ts         # Supabase 클라이언트 초기화
   machineId.ts        # localStorage 기기 ID (UUID)
@@ -68,6 +71,15 @@ types/
 - 50건씩 페이지, 필터 선택지에 값별 건수 표시
 - 행 수정(바뀐 칸만 전송, 전화번호는 변경 불가), 여러 행 선택 후 그룹 일괄 변경·삭제. 차감 없음
 - 내 DB에는 같은 번호가 생기지 않음(DB 정리가 기존 번호를 새로 저장하지 않음) → 중복 검토는 주소록 정리 화면에서만
+- 행마다 수신거부 표시, "수신거부 제외" 필터
+
+### 수신거부 (`/optouts`, DB 저장 권한 계정·슈퍼어드민)
+- 번호 붙여넣기(줄·쉼표·공백 구분) 또는 엑셀/CSV(전화번호 칸 자동 인식)로 등록, 메모 함께 저장
+  - `normalizeOptoutPhones`로 010 형식 정리(구번호 변환 포함), 오류번호는 등록하지 않음
+- 보관 기간과 상관없이 해제할 때까지 남음 (계정이 없어지면 정리)
+- 처리 결과(엑셀 정리·주소록 정리): `Workspace`가 `checkOptouts`로 확인 → 수신거부 배지·미리보기 표시
+- 엑셀받기 확인 창: "수신거부 번호 빼고 받기"(기본 체크) → 뺀 행은 파일에서 제외, **뺀 건수는 차감하지 않음**
+- 주소록 정리의 DB 정리는 수신거부 번호도 그대로 저장 (내 주소록에서 표시·필터로 구분)
 
 ## 컬럼 규칙
 
@@ -177,10 +189,11 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | `dbmerge_book_find` | 주소록 정리: 내 DB에서 같은 번호 행 모두 조회 (최대 1000개씩) |
 | `dbmerge_book_save` | 주소록 정리: 신규 저장(신규 건수 차감) + 기존 번호 빈 칸 채움 (1000행씩) |
 | `dbmerge_book_delete_rows` | 주소록 정리·내 주소록: 고른 내 DB 행 삭제 |
-| `dbmerge_book_search` | 내 주소록: 검색 + 필터 + 페이지 (최대 200행) → `{ total, rows }` |
+| `dbmerge_book_search` | 내 주소록: 검색 + 필터(수신거부 제외 포함) + 페이지 (최대 200행) → `{ total, rows }`, 행마다 `optout` |
 | `dbmerge_book_facets` | 내 주소록: 그룹·당원구분별 건수, 전체 건수 |
 | `dbmerge_book_update_row` | 내 주소록: 행 수정 (전화번호 제외) |
 | `dbmerge_book_set_group` | 내 주소록: 고른 행 그룹 일괄 변경 (최대 1000행) |
+| `dbmerge_optout_add` / `_list` / `_delete` / `_check` | 수신거부 등록·목록·해제·번호 확인 (최대 1000개씩, `dbmerge_optouts`) |
 
 - 세션: `dbmerge_sessions`에 토큰의 SHA-256과 기기(machine_id)만 저장, 30일 만료. 무효 토큰은 errcode `28000`
 - 접속 컴퓨터: `dbmerge_licenses.max_devices`(기본 1) + `dbmerge_devices`(계정별 기기 목록, 처음 등록·마지막 접속)
