@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ProcessResult, RowRecord, Session } from '@/types';
 import { exportExcel } from '@/lib/exporter';
 import { refreshSession, isConfigured as licConfigured } from '@/lib/license';
@@ -12,6 +12,7 @@ interface Props {
   onClose: () => void;
   onLicenseRefresh: () => void;
   exportPrefix?: string;   // 엑셀 파일명 앞부분 (기본 "번호통합")
+  optouts?: Set<string> | null;   // 수신거부 번호 (DB 저장 권한 계정만, 없으면 null)
 }
 
 const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
@@ -35,17 +36,30 @@ const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
   { key: '긴이름나머지', label: '긴이름나머지' },
 ];
 
-export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh, exportPrefix }: Props) {
+export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh, exportPrefix, optouts }: Props) {
   const [step,    setStep]    = useState<'idle' | 'checking' | 'confirm' | 'downloading'>('idle');
   const [session, setSession] = useState<Session | null>(null);
   const [charged, setCharged] = useState(false);   // 이 결과로 이미 차감했으면 다시 받을 때 추가 차감 없음
   const [notice,  setNotice]  = useState('');
 
-  const { uniqueRows, allRows, stats } = result;
+  const [excludeOpt, setExcludeOpt] = useState(true);   // 수신거부 번호 빼고 받기 (기본)
+
+  const { uniqueRows, stats } = result;
+
+  const isOptout = (r: RowRecord) => r.비고작업 !== '오류번호' && !!optouts?.has(r.수정번호);
+  const optCount = uniqueRows.filter(isOptout).length;
+
+  // 실제로 내려받을 결과: 수신거부를 빼면 그만큼 정제결과 건수(차감 기준)도 줄어듦
+  const exporting = useMemo<ProcessResult>(() => {
+    if (!excludeOpt || optCount === 0) return result;
+    const keep = (r: RowRecord) => !(r.비고작업 !== '오류번호' && optouts?.has(r.수정번호));
+    const u = result.uniqueRows.filter(keep);
+    return { uniqueRows: u, allRows: result.allRows.filter(keep), stats: { ...result.stats, unique: u.length } };
+  }, [result, excludeOpt, optCount, optouts]);
 
   // 엑셀받기 — 서버에서 최신 잔여건수를 받아 확인 창 표시 (Supabase 미설정 시 차감 없이 바로 받기)
   const handleExcelClick = async () => {
-    if (!licConfigured) { exportExcel(uniqueRows, allRows, exportPrefix); return; }
+    if (!licConfigured) { exportExcel(exporting.uniqueRows, exporting.allRows, exportPrefix); return; }
     setStep('checking');
     const s = await refreshSession();
     onLicenseRefresh();
@@ -58,16 +72,18 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
     setStep('downloading');
     try {
       if (!charged) {
-        await chargeExport(result, fileNames);
+        await chargeExport(exporting, fileNames);
         setCharged(true);
       }
-      exportExcel(uniqueRows, allRows, exportPrefix);
+      exportExcel(exporting.uniqueRows, exporting.allRows, exportPrefix);
+      const skipped = result.stats.unique - exporting.stats.unique;
       const s = await refreshSession();
       onLicenseRefresh();
       setNotice(
-        charged         ? '✓ 다시 받기 완료 · 추가 차감 없음'
+        (charged        ? '✓ 다시 받기 완료 · 추가 차감 없음'
         : s?.is_admin   ? '✓ 엑셀받기 완료 · 슈퍼어드민(차감 없음)'
-        : `✓ 엑셀받기 완료 · ${stats.unique.toLocaleString()}건 차감 · 잔여 ${s ? (s.quota - s.used).toLocaleString() : '-'}건`,
+        : `✓ 엑셀받기 완료 · ${exporting.stats.unique.toLocaleString()}건 차감 · 잔여 ${s ? (s.quota - s.used).toLocaleString() : '-'}건`)
+        + (skipped > 0 ? ` · 수신거부 ${skipped.toLocaleString()}건 제외` : ''),
       );
     } catch (e: unknown) {
       alert(`엑셀받기 오류: ${e instanceof Error ? e.message : e}`);
@@ -87,6 +103,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
         <StatBadge label="중복제거" value={stats.duplicate} color="orange" />
         <StatBadge label="구번호변환" value={stats.converted} color="blue" />
         <StatBadge label="오류번호" value={stats.error}     color="red" />
+        {optCount > 0 && <StatBadge label="수신거부" value={optCount} color="red" />}
       </div>
 
       {/* 미리보기 테이블 */}
@@ -114,6 +131,9 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
                     }`}
                   >
                     {row[c.key]}
+                    {c.key === '수정번호' && isOptout(row) && (
+                      <span className="ml-1 px-1 rounded bg-red-50 text-red-600">수신거부</span>
+                    )}
                   </td>
                 ))}
               </tr>
@@ -149,8 +169,11 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
 
       {(step === 'confirm' || step === 'downloading') && (
         <ExportDialog
-          count={stats.unique}
+          count={exporting.stats.unique}
           errorCount={stats.error}
+          optCount={optCount}
+          excludeOpt={excludeOpt}
+          onToggleOpt={setExcludeOpt}
           session={session}
           charged={charged}
           busy={step === 'downloading'}
@@ -170,9 +193,12 @@ const EXPORT_NOTICES = [
 ];
 
 /** 엑셀받기 확인 창 — 이번 차감 건수와 잔여건수, 안내 문구 표시 */
-function ExportDialog({ count, errorCount, session, charged, busy, onConfirm, onCancel }: {
+function ExportDialog({ count, errorCount, optCount, excludeOpt, onToggleOpt, session, charged, busy, onConfirm, onCancel }: {
   count: number;
   errorCount: number;
+  optCount: number;
+  excludeOpt: boolean;
+  onToggleOpt: (v: boolean) => void;
   session: Session | null;
   charged: boolean;
   busy: boolean;
@@ -217,6 +243,13 @@ function ExportDialog({ count, errorCount, session, charged, busy, onConfirm, on
 
         {lacking && (
           <p className="text-xs text-red-500">잔여 건수가 부족합니다. 관리자에게 충전을 요청하세요.</p>
+        )}
+
+        {optCount > 0 && (
+          <label className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 cursor-pointer">
+            <input type="checkbox" checked={excludeOpt} disabled={busy} onChange={(e) => onToggleOpt(e.target.checked)} className="mt-0.5" />
+            <span>수신거부 번호 {optCount.toLocaleString()}건 빼고 받기 <span className="text-xs text-red-500">(뺀 건수는 차감하지 않음)</span></span>
+          </label>
         )}
 
         <ul className="text-xs text-gray-500 space-y-1 list-disc pl-4">

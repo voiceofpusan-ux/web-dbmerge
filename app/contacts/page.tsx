@@ -32,7 +32,8 @@ export default function ContactsPage() {
   const [query,    setQuery]    = useState('');
   const [groupSel, setGroupSel] = useState(ALL);
   const [partySel, setPartySel] = useState(ALL);
-  const [filter,   setFilter]   = useState<BookFilter>({ query: '', group: null, party: null });
+  const [hideOpt,  setHideOpt]  = useState(false);
+  const [filter,   setFilter]   = useState<BookFilter>({ query: '', group: null, party: null, hideOptout: false });
   const [page,     setPage]     = useState(0);
   const [data,     setData]     = useState<{ total: number; rows: BookRow[] } | null>(null);
   const [loading,  setLoading]  = useState(false);
@@ -62,7 +63,7 @@ export default function ContactsPage() {
 
   const applySearch = () => {
     setPage(0);
-    setFilter({ query: query.trim(), group: toFilterValue(groupSel), party: toFilterValue(partySel) });
+    setFilter({ query: query.trim(), group: toFilterValue(groupSel), party: toFilterValue(partySel), hideOptout: hideOpt });
   };
 
   const rows = data?.rows ?? [];
@@ -120,6 +121,7 @@ export default function ContactsPage() {
       <header className="bg-white border-b px-6 py-3 flex items-center justify-between shadow-sm">
         <h1 className="text-base font-bold text-gray-800">내 주소록</h1>
         <div className="flex items-center gap-3">
+          <Link href="/optouts" className="text-sm px-3 py-1.5 border border-red-200 text-red-600 rounded-lg hover:bg-red-50">수신거부</Link>
           <Link href="/book" className="text-sm px-3 py-1.5 border border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50">주소록 정리</Link>
           <Link href="/" className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50">엑셀 정리</Link>
         </div>
@@ -151,6 +153,10 @@ export default function ContactsPage() {
               />
               <FacetSelect label="그룹" value={groupSel} onChange={setGroupSel} items={facets?.groups ?? []} />
               <FacetSelect label="당원구분" value={partySel} onChange={setPartySel} items={facets?.parties ?? []} />
+              <label className="flex items-center gap-1.5 text-sm text-gray-600 select-none">
+                <input type="checkbox" checked={hideOpt} onChange={(e) => setHideOpt(e.target.checked)} />
+                수신거부 제외
+              </label>
               <button onClick={applySearch} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">검색</button>
               <span className="text-sm text-gray-500 ml-auto">
                 {data ? `검색 ${data.total.toLocaleString()}건` : ''}{facets ? ` · 전체 ${facets.total.toLocaleString()}건` : ''}
@@ -189,7 +195,10 @@ export default function ContactsPage() {
                   {rows.map((r) => (
                     <tr key={r.row_id} className={`border-b ${selected.has(r.row_id) ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-1.5"><input type="checkbox" checked={selected.has(r.row_id)} onChange={() => toggle(r.row_id)} /></td>
-                      <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-800">{r.fixed_phone}</td>
+                      <td className="px-3 py-1.5 whitespace-nowrap font-medium text-gray-800">
+                        {r.fixed_phone}
+                        {r.optout && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-red-50 text-red-600 text-xs font-normal">수신거부</span>}
+                      </td>
                       <td className="px-3 py-1.5 whitespace-pre">{r.name}</td>
                       <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{r.grp}</td>
                       <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{r.party_type}</td>
