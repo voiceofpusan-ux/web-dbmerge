@@ -12,6 +12,7 @@ export interface JobRecord {
   error: number;
   file_names: string[];
   created_at: string;
+  kind?: 'excel' | 'book';   // 엑셀받기 / DB 정리
 }
 
 /**
