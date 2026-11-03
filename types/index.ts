@@ -64,4 +64,6 @@ export interface Session {
   is_admin: boolean;
   quota: number;
   used: number;
+  can_store?: boolean;              // DB 저장(주소록 정리) 권한
+  retention_hours?: number | null;  // DB 보관 시간 (null = 영구)
 }

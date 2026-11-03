@@ -7,7 +7,7 @@ import UploadPanel from '@/components/UploadPanel';
 import ResultPanel from '@/components/ResultPanel';
 import LicenseDialog from '@/components/LicenseDialog';
 import { process as processData } from '@/lib/deduplicator';
-import { getSession, isConfigured as licConfigured } from '@/lib/license';
+import { getSession, retentionLabel, isConfigured as licConfigured } from '@/lib/license';
 import { isConfigured as dbConfigured } from '@/lib/supabase';
 
 export default function Home() {
@@ -81,6 +81,15 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* DB 저장 권한이 있는 일반 계정에 보관 기간 안내 (슈퍼어드민은 영구) */}
+      {session?.can_store && !session.is_admin && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-sm text-amber-800">
+          {session.retention_hours == null
+            ? 'DB는 영구 보관됩니다.'
+            : `DB는 보관기간이 ${retentionLabel(session.retention_hours)}입니다. 기간이 지나면 자동으로 삭제됩니다.`}
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
         {!result ? (
