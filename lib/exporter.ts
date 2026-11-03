@@ -22,7 +22,7 @@ function makeSheet(rows: RowRecord[]) {
  * 단일 파일 출력 — 정제결과 행 위쪽, 중복 행 아래쪽 정렬
  * 중복작업 컬럼으로 정제/중복 구분
  */
-export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[]) {
+export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[], prefix = '번호통합') {
   const ts = getTimestamp();
   const sorted = [
     ...allRows.filter((r) => r.중복작업 !== '중복'),
@@ -31,5 +31,5 @@ export function exportExcel(uniqueRows: RowRecord[], allRows: RowRecord[]) {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, makeSheet(sorted), '통합결과');
-  XLSX.writeFile(wb, `번호통합_${ts}.xlsx`);
+  XLSX.writeFile(wb, `${prefix}_${ts}.xlsx`);
 }

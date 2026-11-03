@@ -67,3 +67,24 @@ export interface Session {
   can_store?: boolean;              // DB 저장(주소록 정리) 권한
   retention_hours?: number | null;  // DB 보관 시간 (null = 영구)
 }
+
+/** 내 DB(주소록 정리)에 보관된 연락처 행 */
+export interface BookRow {
+  row_id: number;
+  book_id: string;
+  file_name: string;
+  saved_at: string;
+  fixed_phone: string;
+  orig_phone: string;
+  grp: string;
+  name: string;
+  memo: string;
+  address: string;
+  party_type: string;
+  note1: string;
+  note2: string;
+  note3: string;
+  note4: string;
+  note5: string;
+  source: string;
+}
