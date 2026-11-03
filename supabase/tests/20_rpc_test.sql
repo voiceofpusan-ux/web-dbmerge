@@ -187,6 +187,36 @@ set role anon;
 select dbmerge_book_save(:'t_admin', null, '관리자2.xlsx', '[{"fixed_phone":"010-3000-0001"}]') as save_a \gset
 select test.ok((:'save_a'::jsonb ->> 'inserted')::int = 1 and (dbmerge_me(:'t_admin') ->> 'used')::int = 0, '슈퍼어드민은 권한 설정 없이 저장, 차감 없음');
 
+-- ── 내 주소록 (검색·수정) ─────────────────────────────────────
+-- 이 시점 01022223333의 DB: 010-2000-0001 홍길동/서울, 010-2000-0003 이영희/(그룹 없음)
+select test.err(format($$select dbmerge_book_search(%L, '', null, null, 0, 50)$$, :'t_old2'), 'DB 저장 권한', '권한 없는 계정은 주소록 검색 불가');
+select test.ok((dbmerge_book_search(:'t_dev2', '', null, null, 0, 50) ->> 'total')::int = 2, '전체 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '길동', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '홍길동', '이름 일부 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '0003', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '번호 일부 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '010-2000-0003', null, null, 0, 50) ->> 'total')::int = 1, '하이픈 넣은 번호 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '이영희00', null, null, 0, 50) ->> 'total')::int = 0, '글자 섞인 검색어는 숫자만 떼어 번호 검색하지 않음');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '서울', null, 0, 50) ->> 'total')::int = 1, '그룹 필터');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '', null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '그룹 없음 필터');
+select test.ok((dbmerge_book_search(:'t_dev2', '%', null, null, 0, 50) ->> 'total')::int = 0, '% 는 글자 그대로 검색');
+select test.ok((select (r ->> 'total')::int = 2 and jsonb_array_length(r -> 'rows') = 1
+                from dbmerge_book_search(:'t_dev2', '', null, null, 1, 1) r), '페이지 나눠 조회');
+select test.ok((select (f ->> 'total')::int = 2 and f -> 'groups' @> '[{"value":"서울","count":1},{"value":"","count":1}]'
+                from dbmerge_book_facets(:'t_dev2') f), '그룹별 건수');
+
+select (dbmerge_book_search(:'t_dev2', '길동', null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as hong \gset
+select dbmerge_book_update_row(:'t_dev2', :hong, '{"name":" 홍길순 ","memo":"수정","fixed_phone":"010-9999-9999"}');
+select test.ok((select r ->> 'name' = '홍길순' and r ->> 'memo' = '수정' and r ->> 'grp' = '서울' and r ->> 'fixed_phone' = '010-2000-0001'
+                from jsonb_array_elements(dbmerge_book_find(:'t_dev2', '["010-2000-0001"]')) r), '보낸 칸만 수정, 전화번호는 그대로');
+select test.err(format($$select dbmerge_book_update_row(%L, %s, '{"name":"x"}')$$, :'t_dev2', :admin_row), '찾을 수 없습니다', '남의 행 수정 불가');
+
+select (dbmerge_book_search(:'t_dev2', '0003', null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as lee \gset
+select test.ok(dbmerge_book_set_group(:'t_dev2', format('[%s,%s,%s]', :hong, :lee, :admin_row)::jsonb, ' 부산 ') = 2, '그룹 일괄 변경 (내 행만)');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '부산', null, 0, 50) ->> 'total')::int = 2, '바뀐 그룹으로 검색');
+reset role;
+select test.ok((select grp from dbmerge_book_rows where id = :admin_row) <> '부산', '남의 행 그룹은 그대로');
+set role anon;
+select test.err($$select _dbmerge_book_match('x', '', null, null)$$, 'permission denied', '검색 내부 함수 호출 차단');
+
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;
 update dbmerge_licenses set status = 'blocked' where phone = '01011112222';

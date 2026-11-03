@@ -82,6 +82,11 @@ create table if not exists public.dbmerge_book_rows (
 create index if not exists dbmerge_book_rows_phone_idx on public.dbmerge_book_rows (license_id, fixed_phone);
 create index if not exists dbmerge_book_rows_book_idx  on public.dbmerge_book_rows (book_id);
 
+-- 내 주소록 검색: 이름·번호 일부 검색을 빠르게 (trigram 인덱스)
+create extension if not exists pg_trgm with schema extensions;
+create index if not exists dbmerge_book_rows_name_trgm  on public.dbmerge_book_rows using gin (name extensions.gin_trgm_ops);
+create index if not exists dbmerge_book_rows_phone_trgm on public.dbmerge_book_rows using gin ((replace(fixed_phone, '-', '')) extensions.gin_trgm_ops);
+
 alter table public.dbmerge_books     enable row level security;
 alter table public.dbmerge_book_rows enable row level security;
 revoke all on public.dbmerge_books, public.dbmerge_book_rows from anon, authenticated;
@@ -517,6 +522,125 @@ begin
   return n;
 end $$;
 
+-- ── 내 주소록 (검색·수정) ─────────────────────────────────────
+
+-- 검색 조건에 맞는 내 행. p_group·p_party가 null이면 전체, ''이면 빈 값인 행
+create or replace function public._dbmerge_book_match(p_license_id text, p_query text, p_group text, p_party text)
+returns setof public.dbmerge_book_rows
+language sql stable
+set search_path = public, extensions
+as $$
+  with q as (
+    select btrim(coalesce(p_query, '')) as raw,
+           -- ILIKE 특수문자(% _ \)는 글자 그대로 찾도록 이스케이프
+           replace(replace(replace(btrim(coalesce(p_query, '')), '\', '\\'), '%', '\%'), '_', '\_') as pat,
+           regexp_replace(coalesce(p_query, ''), '\D', '', 'g') as digits
+  )
+  select r.* from dbmerge_book_rows r, q
+  where r.license_id = p_license_id
+    and (p_group is null or r.grp = p_group)
+    and (p_party is null or r.party_type = p_party)
+    and (q.raw = ''
+      or r.name    ilike '%' || q.pat || '%'
+      or r.memo    ilike '%' || q.pat || '%'
+      or r.address ilike '%' || q.pat || '%'
+      -- 번호 검색은 검색어가 숫자(하이픈·공백 허용)로만 됐을 때만. "사람05"의 05로 번호를 찾지 않게
+      or (q.raw ~ '^[0-9 -]+$' and length(q.digits) >= 2 and replace(r.fixed_phone, '-', '') like '%' || q.digits || '%'))
+$$;
+
+-- 검색 + 페이지 (최대 200행씩). { total, rows: [...] }
+create or replace function public.dbmerge_book_search(
+  p_token text, p_query text, p_group text, p_party text, p_offset int, p_limit int
+)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v     dbmerge_licenses := _dbmerge_store_auth(p_token);
+  total int;
+  rows  jsonb;
+begin
+  select count(*) into total from _dbmerge_book_match(v.id::text, p_query, p_group, p_party);
+  select coalesce(jsonb_agg(x order by x.ord), '[]'::jsonb) into rows from (
+    select row_number() over (order by m.name, m.fixed_phone, m.id) as ord,
+           m.id as row_id, m.book_id, b.file_name, b.created_at as saved_at,
+           m.fixed_phone, m.orig_phone, m.grp, m.name, m.memo, m.address, m.party_type,
+           m.note1, m.note2, m.note3, m.note4, m.note5, m.source
+    from _dbmerge_book_match(v.id::text, p_query, p_group, p_party) m
+    join dbmerge_books b on b.id = m.book_id
+    order by m.name, m.fixed_phone, m.id
+    offset greatest(coalesce(p_offset, 0), 0)
+    limit least(greatest(coalesce(p_limit, 50), 1), 200)
+  ) x;
+  return jsonb_build_object('total', total, 'rows', rows);
+end $$;
+
+-- 필터 선택지: 내 주소록의 그룹·당원구분별 건수와 전체 건수
+create or replace function public.dbmerge_book_facets(p_token text)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+begin
+  return jsonb_build_object(
+    'total',   (select count(*) from dbmerge_book_rows where license_id = v.id::text),
+    'groups',  coalesce((select jsonb_agg(jsonb_build_object('value', grp, 'count', n) order by grp)
+                         from (select grp, count(*) n from dbmerge_book_rows where license_id = v.id::text group by grp) g), '[]'::jsonb),
+    'parties', coalesce((select jsonb_agg(jsonb_build_object('value', party_type, 'count', n) order by party_type)
+                         from (select party_type, count(*) n from dbmerge_book_rows where license_id = v.id::text group by party_type) p), '[]'::jsonb)
+  );
+end $$;
+
+-- 행 수정 (전화번호는 비교 기준이라 바꾸지 않음). p_fields에 있는 칸만 바꿈
+create or replace function public.dbmerge_book_update_row(p_token text, p_row_id bigint, p_fields jsonb)
+returns void
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+  f jsonb := coalesce(p_fields, '{}'::jsonb);
+begin
+  update dbmerge_book_rows set
+    grp        = coalesce(btrim(f ->> 'grp'),        grp),
+    name       = coalesce(btrim(f ->> 'name'),       name),
+    memo       = coalesce(btrim(f ->> 'memo'),       memo),
+    address    = coalesce(btrim(f ->> 'address'),    address),
+    party_type = coalesce(btrim(f ->> 'party_type'), party_type),
+    note1      = coalesce(btrim(f ->> 'note1'),      note1),
+    note2      = coalesce(btrim(f ->> 'note2'),      note2),
+    note3      = coalesce(btrim(f ->> 'note3'),      note3),
+    note4      = coalesce(btrim(f ->> 'note4'),      note4),
+    note5      = coalesce(btrim(f ->> 'note5'),      note5)
+  where id = p_row_id and license_id = v.id::text;
+  if not found then
+    raise exception '수정할 행을 찾을 수 없습니다.';
+  end if;
+end $$;
+
+-- 고른 행(최대 1000개)의 그룹을 한 번에 변경
+create or replace function public.dbmerge_book_set_group(p_token text, p_row_ids jsonb, p_group text)
+returns integer
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+  n integer;
+begin
+  if jsonb_array_length(coalesce(p_row_ids, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000행까지 바꿀 수 있습니다.';
+  end if;
+  update dbmerge_book_rows set grp = btrim(coalesce(p_group, ''))
+  where license_id = v.id::text
+    and id in (select (jsonb_array_elements_text(coalesce(p_row_ids, '[]'::jsonb)))::bigint);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
 -- ── 만료 보관 데이터 삭제 ─────────────────────────────────────
 -- 매시간 예약 작업으로 실행. 주소록 정리 함수도 실행 전에 호출하므로 예약 작업이 없어도 만료분은 쓰이지 않음
 create or replace function public.dbmerge_purge_expired()
@@ -562,6 +686,7 @@ revoke all on function public._dbmerge_use_device(public.dbmerge_licenses, text)
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
 revoke all on function public.dbmerge_purge_expired()                            from public, anon, authenticated;
 revoke all on function public._dbmerge_store_auth(text)                          from public, anon, authenticated;
+revoke all on function public._dbmerge_book_match(text, text, text, text)        from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;
 revoke all on function public.dbmerge_login(text, text, text)                             from public;
@@ -572,6 +697,10 @@ revoke all on function public.dbmerge_get_jobs(text)                            
 revoke all on function public.dbmerge_book_find(text, jsonb)                              from public;
 revoke all on function public.dbmerge_book_save(text, uuid, text, jsonb)                  from public;
 revoke all on function public.dbmerge_book_delete_rows(text, jsonb)                       from public;
+revoke all on function public.dbmerge_book_search(text, text, text, text, int, int)       from public;
+revoke all on function public.dbmerge_book_facets(text)                                   from public;
+revoke all on function public.dbmerge_book_update_row(text, bigint, jsonb)                from public;
+revoke all on function public.dbmerge_book_set_group(text, jsonb, text)                   from public;
 
 grant execute on function public.dbmerge_register(text, text, text, text)                 to anon, authenticated;
 grant execute on function public.dbmerge_login(text, text, text)                          to anon, authenticated;
@@ -582,3 +711,7 @@ grant execute on function public.dbmerge_get_jobs(text)                         
 grant execute on function public.dbmerge_book_find(text, jsonb)                           to anon, authenticated;
 grant execute on function public.dbmerge_book_save(text, uuid, text, jsonb)               to anon, authenticated;
 grant execute on function public.dbmerge_book_delete_rows(text, jsonb)                    to anon, authenticated;
+grant execute on function public.dbmerge_book_search(text, text, text, text, int, int)    to anon, authenticated;
+grant execute on function public.dbmerge_book_facets(text)                                to anon, authenticated;
+grant execute on function public.dbmerge_book_update_row(text, bigint, jsonb)             to anon, authenticated;
+grant execute on function public.dbmerge_book_set_group(text, jsonb, text)                to anon, authenticated;
