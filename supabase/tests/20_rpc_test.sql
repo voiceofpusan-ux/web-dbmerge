@@ -102,21 +102,34 @@ select test.err('select * from dbmerge_books', 'permission denied', '보관 묶�
 select test.err('select * from dbmerge_book_rows', 'permission denied', '보관 연락처 직접 조회 차단');
 select test.err('select dbmerge_purge_expired()', 'permission denied', '만료 삭제 함수 호출 차단');
 
+select test.ok((dbmerge_me(:'t_dev2') ->> 'retention_hours')::int = 72, '보관 기간 기본 72시간');
+select test.ok((dbmerge_me(:'t_admin') -> 'retention_hours') = 'null'::jsonb, '슈퍼어드민은 영구 보관(null)');
+
 reset role;
-insert into dbmerge_books (id, license_id, file_name, row_count, expires_at) values
-  ('00000000-0000-0000-0000-0000000000b1', 'L1', '지난주.xlsx', 2, now() - interval '1 minute'),
-  ('00000000-0000-0000-0000-0000000000b2', 'L1', '오늘.xlsx',   1, default);
-insert into dbmerge_book_rows (book_id, license_id, fixed_phone) values
-  ('00000000-0000-0000-0000-0000000000b1', 'L1', '010-1111-0001'),
-  ('00000000-0000-0000-0000-0000000000b1', 'L1', '010-1111-0002'),
-  ('00000000-0000-0000-0000-0000000000b2', 'L1', '010-1111-0003');
-select test.ok((select expires_at::date - created_at::date from dbmerge_books where file_name = '오늘.xlsx') = 10, '보관 기간 기본 10일');
-select test.ok(dbmerge_purge_expired() = 1, '만료된 묶음 1개 삭제');
-select test.ok((select array_agg(fixed_phone) from dbmerge_book_rows) = array['010-1111-0003'], '만료 묶음의 연락처도 함께 삭제');
-update dbmerge_books set expires_at = now() - interval '1 second' where file_name = '오늘.xlsx';   -- 관리자가 달력으로 만료일을 앞당김
-select test.ok(dbmerge_purge_expired() = 1, '만료일을 바꾸면 그 기준으로 삭제');
-select test.ok((select count(*) from dbmerge_book_rows) = 0, '남은 보관 연락처 없음');
+-- 일반 계정(01022223333): 4일 전·1일 전 묶음 / 슈퍼어드민: 100일 전 묶음
+insert into dbmerge_books (id, license_id, file_name, row_count, created_at)
+select '00000000-0000-0000-0000-0000000000b1'::uuid, id::text, '4일전.xlsx', 2, now() - interval '4 days' from dbmerge_licenses where phone = '01022223333'
+union all
+select '00000000-0000-0000-0000-0000000000b2'::uuid, id::text, '1일전.xlsx', 1, now() - interval '1 day'  from dbmerge_licenses where phone = '01022223333'
+union all
+select '00000000-0000-0000-0000-0000000000b3'::uuid, id::text, '관리자.xlsx', 1, now() - interval '100 days' from dbmerge_licenses where phone = '01099990000'
+union all
+select '00000000-0000-0000-0000-0000000000b4'::uuid, 'deleted-account', '탈퇴계정.xlsx', 1, now();
+insert into dbmerge_book_rows (book_id, license_id, fixed_phone)
+select id, license_id, '010-1111-000' || n from dbmerge_books, generate_series(1, row_count) n;
+
+select test.ok(dbmerge_purge_expired() = 2, '72시간 지난 묶음과 계정 없는 묶음 삭제');
+select test.ok((select array_agg(file_name order by file_name) from dbmerge_books) = array['1일전.xlsx', '관리자.xlsx'], '보관 기간 안 묶음·슈퍼어드민 묶음은 유지');
+select test.ok((select count(*) from dbmerge_book_rows) = 2, '삭제된 묶음의 연락처도 함께 삭제');
+
+update dbmerge_licenses set retention_hours = 12 where phone = '01022223333';     -- 관리자가 12시간으로 줄임
+select test.ok(dbmerge_purge_expired() = 1, '기간을 줄이면 기존 데이터에도 바로 적용');
+update dbmerge_licenses set retention_hours = null where phone = '01022223333';   -- 관리자가 영구로 바꿈
+insert into dbmerge_books (license_id, file_name, row_count, created_at)
+select id::text, '1년전.xlsx', 0, now() - interval '365 days' from dbmerge_licenses where phone = '01022223333';
+select test.ok(dbmerge_purge_expired() = 0, '영구 보관 계정은 삭제 안 함');
 set role anon;
+select test.ok((dbmerge_me(:'t_dev2') -> 'retention_hours') = 'null'::jsonb, '영구로 바꾸면 내 정보에 null');
 
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;
