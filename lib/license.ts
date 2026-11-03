@@ -20,9 +20,17 @@ function saveSession(token: string, profile: Profile): Session {
     is_admin: profile.is_admin,
     quota:    profile.quota,
     used:     profile.used,
+    can_store:       profile.can_store,
+    retention_hours: profile.retention_hours,
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   return session;
+}
+
+/** DB 보관 시간 안내 문구용: 72 → "72시간(3일)", null → "영구" */
+export function retentionLabel(hours: number | null | undefined): string {
+  if (hours == null) return '영구';
+  return hours % 24 === 0 ? `${hours}시간(${hours / 24}일)` : `${hours}시간`;
 }
 
 /**

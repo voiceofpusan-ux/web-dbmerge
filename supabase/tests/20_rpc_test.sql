@@ -92,6 +92,45 @@ select test.err($$select dbmerge_login('01022223333', 'pass1234', '')$$, '기기
 select test.err('select * from dbmerge_devices', 'permission denied', '기기 목록 직접 조회 차단');
 select test.err($$select _dbmerge_use_device(null, 'x')$$, 'permission denied', '기기 등록 내부 함수 호출 차단');
 
+-- ── DB 저장 권한·보관 기간 ────────────────────────────────────
+select test.ok((dbmerge_me(:'t_dev2') ->> 'can_store')::boolean = false, 'DB 저장 권한 기본값 꺼짐');
+reset role;
+update dbmerge_licenses set can_store = true where phone = '01022223333';   -- 관리자 콘솔에서 권한 켬
+set role anon;
+select test.ok((dbmerge_me(:'t_dev2') ->> 'can_store')::boolean = true, '권한을 켜면 내 정보에 반영');
+select test.err('select * from dbmerge_books', 'permission denied', '보관 묶음 직접 조회 차단');
+select test.err('select * from dbmerge_book_rows', 'permission denied', '보관 연락처 직접 조회 차단');
+select test.err('select dbmerge_purge_expired()', 'permission denied', '만료 삭제 함수 호출 차단');
+
+select test.ok((dbmerge_me(:'t_dev2') ->> 'retention_hours')::int = 72, '보관 기간 기본 72시간');
+select test.ok((dbmerge_me(:'t_admin') -> 'retention_hours') = 'null'::jsonb, '슈퍼어드민은 영구 보관(null)');
+
+reset role;
+-- 일반 계정(01022223333): 4일 전·1일 전 묶음 / 슈퍼어드민: 100일 전 묶음
+insert into dbmerge_books (id, license_id, file_name, row_count, created_at)
+select '00000000-0000-0000-0000-0000000000b1'::uuid, id::text, '4일전.xlsx', 2, now() - interval '4 days' from dbmerge_licenses where phone = '01022223333'
+union all
+select '00000000-0000-0000-0000-0000000000b2'::uuid, id::text, '1일전.xlsx', 1, now() - interval '1 day'  from dbmerge_licenses where phone = '01022223333'
+union all
+select '00000000-0000-0000-0000-0000000000b3'::uuid, id::text, '관리자.xlsx', 1, now() - interval '100 days' from dbmerge_licenses where phone = '01099990000'
+union all
+select '00000000-0000-0000-0000-0000000000b4'::uuid, 'deleted-account', '탈퇴계정.xlsx', 1, now();
+insert into dbmerge_book_rows (book_id, license_id, fixed_phone)
+select id, license_id, '010-1111-000' || n from dbmerge_books, generate_series(1, row_count) n;
+
+select test.ok(dbmerge_purge_expired() = 2, '72시간 지난 묶음과 계정 없는 묶음 삭제');
+select test.ok((select array_agg(file_name order by file_name) from dbmerge_books) = array['1일전.xlsx', '관리자.xlsx'], '보관 기간 안 묶음·슈퍼어드민 묶음은 유지');
+select test.ok((select count(*) from dbmerge_book_rows) = 2, '삭제된 묶음의 연락처도 함께 삭제');
+
+update dbmerge_licenses set retention_hours = 12 where phone = '01022223333';     -- 관리자가 12시간으로 줄임
+select test.ok(dbmerge_purge_expired() = 1, '기간을 줄이면 기존 데이터에도 바로 적용');
+update dbmerge_licenses set retention_hours = null where phone = '01022223333';   -- 관리자가 영구로 바꿈
+insert into dbmerge_books (license_id, file_name, row_count, created_at)
+select id::text, '1년전.xlsx', 0, now() - interval '365 days' from dbmerge_licenses where phone = '01022223333';
+select test.ok(dbmerge_purge_expired() = 0, '영구 보관 계정은 삭제 안 함');
+set role anon;
+select test.ok((dbmerge_me(:'t_dev2') -> 'retention_hours') = 'null'::jsonb, '영구로 바꾸면 내 정보에 null');
+
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;
 update dbmerge_licenses set status = 'blocked' where phone = '01011112222';

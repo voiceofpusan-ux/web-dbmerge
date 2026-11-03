@@ -11,6 +11,8 @@ create table if not exists public.dbmerge_licenses (
   computer_name text,
   machine_id    text not null default '',   -- 이전 방식(1대) 호환용. 기기 목록은 dbmerge_devices
   max_devices   integer not null default 1,
+  can_store     boolean not null default false,   -- DB 저장(주소록 정리) 권한
+  retention_hours integer default 72,             -- DB 보관 시간 (null = 영구)
   is_admin      boolean not null default false,
   status        text not null default 'active' check (status in ('pending', 'active', 'blocked')),
   quota         integer not null default 300,

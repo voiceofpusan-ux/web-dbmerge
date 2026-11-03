@@ -6,7 +6,7 @@ const rpc = vi.hoisted(() => vi.fn());
 vi.mock('./supabase', () => ({ isConfigured: true, supabase: { rpc } }));
 vi.mock('./machineId', () => ({ getMachineId: async () => 'machine-1' }));
 
-import { login, register, logout, getSession, refreshSession } from './license';
+import { login, register, logout, getSession, refreshSession, retentionLabel } from './license';
 
 const profile = { id: 'u1', name: '홍길동', phone: '01012345678', is_admin: false, quota: 300, used: 0 };
 
@@ -86,5 +86,22 @@ describe('logout', () => {
     await logout();
     expect(getSession()).toBeNull();
     expect(rpc).toHaveBeenCalledWith('dbmerge_logout', { p_token: 'tok' });
+  });
+});
+
+describe('DB 저장 권한·보관 시간', () => {
+  it('서버가 준 권한과 보관 시간을 세션에 저장', async () => {
+    rpc.mockResolvedValue({ data: { token: 'tok', profile: { ...profile, can_store: true, retention_hours: 72 } }, error: null });
+    await login('01012345678', 'pw123456');
+    expect(getSession()).toMatchObject({ can_store: true, retention_hours: 72 });
+  });
+});
+
+describe('retentionLabel', () => {
+  it('보관 시간 안내 문구', () => {
+    expect(retentionLabel(72)).toBe('72시간(3일)');
+    expect(retentionLabel(24)).toBe('24시간(1일)');
+    expect(retentionLabel(12)).toBe('12시간');
+    expect(retentionLabel(null)).toBe('영구');
   });
 });

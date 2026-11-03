@@ -38,6 +38,50 @@ select id::text, machine_id from public.dbmerge_licenses where coalesce(machine_
 on conflict do nothing;
 update public.dbmerge_licenses set machine_id = '' where coalesce(machine_id, '') <> '';
 
+-- ── 주소록 보관 (DB 저장 권한 계정만) ─────────────────────────
+-- 업로드 묶음(파일) 단위로 저장하고, 저장 시각 + 계정 보관 시간이 지나면 삭제
+-- 관리자 콘솔에서 계정별 권한(can_store)과 보관 시간(retention_hours, 비우면 영구)을 바꿈
+-- 보관 시간을 바꾸면 이미 저장된 묶음에도 바로 적용됨 (삭제 시점을 매번 계산). 슈퍼어드민은 항상 영구
+alter table public.dbmerge_licenses add column if not exists can_store boolean not null default false;
+alter table public.dbmerge_licenses add column if not exists retention_hours integer default 72;
+
+create table if not exists public.dbmerge_books (
+  id         uuid primary key default gen_random_uuid(),
+  license_id text not null,
+  file_name  text not null default '',
+  row_count  integer not null default 0,
+  created_at timestamptz not null default now()
+);
+-- 이전 버전(묶음별 만료일)에서 만든 칸·인덱스 정리
+drop index if exists public.dbmerge_books_license_idx;
+alter table public.dbmerge_books drop column if exists expires_at;
+create index if not exists dbmerge_books_license_created_idx on public.dbmerge_books (license_id, created_at);
+
+create table if not exists public.dbmerge_book_rows (
+  id          bigint generated always as identity primary key,
+  book_id     uuid not null references public.dbmerge_books (id) on delete cascade,
+  license_id  text not null,
+  fixed_phone text not null default '',   -- 정리된 번호 (비교 기준)
+  orig_phone  text not null default '',
+  grp         text not null default '',
+  name        text not null default '',
+  memo        text not null default '',
+  address     text not null default '',
+  party_type  text not null default '',
+  note1       text not null default '',
+  note2       text not null default '',
+  note3       text not null default '',
+  note4       text not null default '',
+  note5       text not null default '',
+  source      text not null default ''
+);
+create index if not exists dbmerge_book_rows_phone_idx on public.dbmerge_book_rows (license_id, fixed_phone);
+create index if not exists dbmerge_book_rows_book_idx  on public.dbmerge_book_rows (book_id);
+
+alter table public.dbmerge_books     enable row level security;
+alter table public.dbmerge_book_rows enable row level security;
+revoke all on public.dbmerge_books, public.dbmerge_book_rows from anon, authenticated;
+
 -- ── 내부 함수 (anon 호출 불가) ────────────────────────────────
 
 create or replace function public._dbmerge_token_hash(p_token text)
@@ -56,7 +100,10 @@ as $$
     'phone',    v.phone,
     'is_admin', coalesce(v.is_admin, false),
     'quota',    coalesce(v.quota, 0),
-    'used',     coalesce(v.used, 0)
+    'used',     coalesce(v.used, 0),
+    'can_store', coalesce(v.can_store, false),
+    -- null = 영구 보관
+    'retention_hours', case when coalesce(v.is_admin, false) then null else v.retention_hours end
   )
 $$;
 
@@ -288,6 +335,42 @@ begin
     select * from dbmerge_jobs where user_id::text = v.id::text order by created_at desc;
 end $$;
 
+-- ── 만료 보관 데이터 삭제 ─────────────────────────────────────
+-- 매시간 예약 작업으로 실행. 주소록 정리 함수도 실행 전에 호출하므로 예약 작업이 없어도 만료분은 쓰이지 않음
+create or replace function public.dbmerge_purge_expired()
+returns integer
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  n integer;
+begin
+  -- 행은 on delete cascade로 함께 삭제. 계정이 지워진 묶음도 삭제
+  delete from dbmerge_books b
+  where not exists (select 1 from dbmerge_licenses l where l.id::text = b.license_id)
+     or exists (
+          select 1 from dbmerge_licenses l
+          where l.id::text = b.license_id
+            and not coalesce(l.is_admin, false)
+            and l.retention_hours is not null
+            and b.created_at + make_interval(hours => l.retention_hours) <= now());
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- 매시간 7분에 만료 데이터 삭제 (보관 72시간 기준 최대 1시간 지연). pg_cron을 켤 수 없는 환경이면 안내만 하고 넘어감
+do $$
+begin
+  begin
+    create extension if not exists pg_cron;
+  exception when others then
+    raise notice 'pg_cron을 켤 수 없어 자동 삭제 예약을 건너뜁니다 (Database → Extensions에서 pg_cron을 켜고 이 파일을 다시 실행). 원인: %', sqlerrm;
+    return;
+  end;
+  perform cron.unschedule(jobid) from cron.job where jobname = 'dbmerge-purge-expired';
+  perform cron.schedule('dbmerge-purge-expired', '7 * * * *', 'select public.dbmerge_purge_expired()');
+end $$;
+
 -- ── 권한 ──────────────────────────────────────────────────────
 -- Supabase는 새 함수를 anon에게 기본 허용하므로 내부 함수는 명시적으로 회수
 revoke all on function public._dbmerge_token_hash(text)                          from public, anon, authenticated;
@@ -295,6 +378,7 @@ revoke all on function public._dbmerge_profile(public.dbmerge_licenses)         
 revoke all on function public._dbmerge_new_session(text, text)                   from public, anon, authenticated;
 revoke all on function public._dbmerge_use_device(public.dbmerge_licenses, text) from public, anon, authenticated;
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
+revoke all on function public.dbmerge_purge_expired()                            from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;
 revoke all on function public.dbmerge_login(text, text, text)                             from public;
