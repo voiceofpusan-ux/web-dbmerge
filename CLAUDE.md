@@ -15,10 +15,14 @@
 ```
 app/
   layout.tsx          # 루트 레이아웃
-  page.tsx            # 메인 페이지 (업로드 + 처리 + 결과)
+  page.tsx            # 엑셀 정리 (Workspace mode="excel")
+  book/
+    page.tsx          # 주소록 정리 (Workspace mode="book", DB 저장 권한 계정)
   history/
     page.tsx          # 사용 이력(엑셀받기 차감 기록) 조회 페이지
 components/
+  Workspace.tsx       # 업로드 + 처리 + 결과 화면 (엑셀 정리 / 주소록 정리 공용)
+  BookPanel.tsx       # 주소록 정리: 내 DB와 비교, 중복 검토(DB 행 삭제), DB 정리
   UploadPanel.tsx     # 파일 드롭 + 컬럼 매핑 테이블
   ResultPanel.tsx     # 결과 미리보기 + 엑셀받기(차감 확인 창)
   LicenseDialog.tsx   # 라이선스 등록/현황 모달
@@ -28,6 +32,7 @@ lib/
   deduplicator.ts     # 시트 통합 + 중복제거 처리
   exporter.ts         # xlsx 다운로드 (정제결과 위 + 중복 행 아래, 단일 시트)
   db.ts               # 엑셀받기 건수 차감(chargeExport) + 사용 이력 조회
+  book.ts             # 주소록 정리 서버 호출 (findExisting / saveBook / deleteBookRows)
   license.ts          # Supabase 라이선스 조회/등록/차감
   supabase.ts         # Supabase 클라이언트 초기화
   machineId.ts        # localStorage 기기 ID (UUID)
@@ -44,7 +49,17 @@ types/
    - 연락처 행은 서버로 보내지 않음 (통계만 전송). DB 저장 기능은 없음
    - 같은 결과 다시 받기는 추가 차감 없음, "다시 작업" 후 새로 처리하면 다시 차감
    - Supabase 미설정(로컬) 환경에서는 차감 없이 바로 다운로드
-6. `/history` 페이지 → `db.getJobs()` → 사용 이력(날짜·파일명·차감 건수)
+6. `/history` 페이지 → `db.getJobs()` → 사용 이력(엑셀받기/DB 정리 구분, 날짜·파일명·차감 건수)
+
+### 주소록 정리 (`/book`, DB 저장 권한 계정·슈퍼어드민)
+1. 업로드 → 처리하기 (엑셀 정리와 같음)
+2. `BookPanel` → `book.findExisting()` → RPC `dbmerge_book_find`(1000개씩) → 신규 / DB중복 표시
+   - 오류번호는 비교·저장 대상에서 제외 (엑셀에는 포함)
+3. 중복 검토: 번호별로 이번 파일 행 + DB 행 전부 표시 → 체크한 DB 행 `dbmerge_book_delete_rows`로 삭제
+4. **DB 정리** → 확인 창 → `book.saveBook()` → RPC `dbmerge_book_save`(1000행씩 같은 묶음에 이어 저장)
+   - 신규 번호 저장, **신규 건수만큼 차감**. 기존 번호는 빈 칸만 채움(기존 값 유지, 차감 없음)
+   - 사용 이력에 `kind = 'book'`으로 묶음당 한 줄 누적
+5. **엑셀받기** → 엑셀 정리와 같은 확인 창·차감(정제결과 건수), 파일명 `아이디_주소록정리_YYYYMMDD_HHMMSS.xlsx`
 
 ## 컬럼 규칙
 
@@ -150,7 +165,10 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | `dbmerge_register` / `dbmerge_login` | 가입·로그인 → `{ token, profile }` 반환 |
 | `dbmerge_me` / `dbmerge_logout` | 내 정보(잔여건수) 조회 / 토큰 폐기 |
 | `dbmerge_start_job` | 엑셀받기 때 `used + n <= quota` 조건으로 원자적 차감 + 사용 기록 생성 |
-| `dbmerge_get_jobs` | 내 사용 이력 조회 |
+| `dbmerge_get_jobs` | 내 사용 이력 조회 (`kind`: excel / book) |
+| `dbmerge_book_find` | 주소록 정리: 내 DB에서 같은 번호 행 모두 조회 (최대 1000개씩) |
+| `dbmerge_book_save` | 주소록 정리: 신규 저장(신규 건수 차감) + 기존 번호 빈 칸 채움 (1000행씩) |
+| `dbmerge_book_delete_rows` | 주소록 정리: 고른 내 DB 행 삭제 |
 
 - 세션: `dbmerge_sessions`에 토큰의 SHA-256과 기기(machine_id)만 저장, 30일 만료. 무효 토큰은 errcode `28000`
 - 접속 컴퓨터: `dbmerge_licenses.max_devices`(기본 1) + `dbmerge_devices`(계정별 기기 목록, 처음 등록·마지막 접속)
