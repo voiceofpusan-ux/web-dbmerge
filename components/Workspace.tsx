@@ -8,6 +8,8 @@ import UploadPanel from '@/components/UploadPanel';
 import ResultPanel from '@/components/ResultPanel';
 import LicenseDialog from '@/components/LicenseDialog';
 import BookPanel from '@/components/BookPanel';
+import { bookTargets } from '@/lib/book';
+import { checkOptouts } from '@/lib/optout';
 import { process as processData } from '@/lib/deduplicator';
 import { getSession, retentionLabel, isConfigured as licConfigured } from '@/lib/license';
 import { isConfigured as dbConfigured } from '@/lib/supabase';
@@ -36,6 +38,18 @@ export default function Workspace({ mode }: { mode: 'excel' | 'book' }) {
   // 주소록 정리는 DB 저장 권한 계정과 슈퍼어드민만
   const canStore = !!session && (!!session.can_store || session.is_admin);
   const bookBlocked = mode === 'book' && licConfigured && !!session && !canStore;
+
+  // 처리 결과의 번호 중 수신거부 확인 (DB 저장 권한 계정만). 실패해도 엑셀받기는 그대로 가능
+  const [optouts, setOptouts] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    setOptouts(null);
+    if (!result || !canStore) return;
+    let alive = true;
+    checkOptouts(bookTargets(result.uniqueRows).map((r) => r.수정번호))
+      .then((set) => { if (alive) setOptouts(set); })
+      .catch(() => { /* 수신거부 확인 실패 시 표시만 생략 */ });
+    return () => { alive = false; };
+  }, [result, canStore]);
 
   const selectedSheet = sheets.find((s) => s.id === selectedId);
   const fileNames = [...new Set(sheets.map((s) => s.fileName))];
@@ -91,6 +105,11 @@ export default function Workspace({ mode }: { mode: 'excel' | 'book' }) {
           {canStore && (
             <Link href="/contacts" className="text-sm px-3 py-1.5 border border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50">
               내 주소록
+            </Link>
+          )}
+          {canStore && (
+            <Link href="/optouts" className="text-sm px-3 py-1.5 border border-red-200 text-red-600 rounded-lg hover:bg-red-50">
+              수신거부
             </Link>
           )}
           {licConfigured && (
@@ -227,6 +246,7 @@ export default function Workspace({ mode }: { mode: 'excel' | 'book' }) {
                 onClose={() => setResult(null)}
                 onLicenseRefresh={refreshSession}
                 exportPrefix={mode === 'book' ? `${session?.phone || '주소록'}_주소록정리` : undefined}
+                optouts={optouts}
               />
             </div>
           </>

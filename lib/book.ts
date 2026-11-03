@@ -105,6 +105,7 @@ export interface BookFilter {
   query: string;
   group: string | null;   // null = 전체, '' = 그룹 없음
   party: string | null;   // null = 전체, '' = 당원구분 없음
+  hideOptout: boolean;    // 수신거부 번호 빼고 보기
 }
 
 export interface Facet { value: string; count: number }
@@ -119,6 +120,7 @@ export async function searchBook(
     p_query:  filter.query,
     p_group:  filter.group,
     p_party:  filter.party,
+    p_hide_optout: filter.hideOptout,
     p_offset: offset,
     p_limit:  limit,
   });

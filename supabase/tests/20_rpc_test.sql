@@ -189,33 +189,66 @@ select test.ok((:'save_a'::jsonb ->> 'inserted')::int = 1 and (dbmerge_me(:'t_ad
 
 -- ── 내 주소록 (검색·수정) ─────────────────────────────────────
 -- 이 시점 01022223333의 DB: 010-2000-0001 홍길동/서울, 010-2000-0003 이영희/(그룹 없음)
-select test.err(format($$select dbmerge_book_search(%L, '', null, null, 0, 50)$$, :'t_old2'), 'DB 저장 권한', '권한 없는 계정은 주소록 검색 불가');
-select test.ok((dbmerge_book_search(:'t_dev2', '', null, null, 0, 50) ->> 'total')::int = 2, '전체 검색');
-select test.ok((dbmerge_book_search(:'t_dev2', '길동', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '홍길동', '이름 일부 검색');
-select test.ok((dbmerge_book_search(:'t_dev2', '0003', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '번호 일부 검색');
-select test.ok((dbmerge_book_search(:'t_dev2', '010-2000-0003', null, null, 0, 50) ->> 'total')::int = 1, '하이픈 넣은 번호 검색');
-select test.ok((dbmerge_book_search(:'t_dev2', '이영희00', null, null, 0, 50) ->> 'total')::int = 0, '글자 섞인 검색어는 숫자만 떼어 번호 검색하지 않음');
-select test.ok((dbmerge_book_search(:'t_dev2', '', '서울', null, 0, 50) ->> 'total')::int = 1, '그룹 필터');
-select test.ok((dbmerge_book_search(:'t_dev2', '', '', null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '그룹 없음 필터');
-select test.ok((dbmerge_book_search(:'t_dev2', '%', null, null, 0, 50) ->> 'total')::int = 0, '% 는 글자 그대로 검색');
+select test.err(format($$select dbmerge_book_search(%L, '', null, null, null, 0, 50)$$, :'t_old2'), 'DB 저장 권한', '권한 없는 계정은 주소록 검색 불가');
+select test.ok((dbmerge_book_search(:'t_dev2', '', null, null, null, 0, 50) ->> 'total')::int = 2, '전체 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '길동', null, null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '홍길동', '이름 일부 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '0003', null, null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '번호 일부 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '010-2000-0003', null, null, null, 0, 50) ->> 'total')::int = 1, '하이픈 넣은 번호 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '이영희00', null, null, null, 0, 50) ->> 'total')::int = 0, '글자 섞인 검색어는 숫자만 떼어 번호 검색하지 않음');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '서울', null, null, 0, 50) ->> 'total')::int = 1, '그룹 필터');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '그룹 없음 필터');
+select test.ok((dbmerge_book_search(:'t_dev2', '%', null, null, null, 0, 50) ->> 'total')::int = 0, '% 는 글자 그대로 검색');
 select test.ok((select (r ->> 'total')::int = 2 and jsonb_array_length(r -> 'rows') = 1
-                from dbmerge_book_search(:'t_dev2', '', null, null, 1, 1) r), '페이지 나눠 조회');
+                from dbmerge_book_search(:'t_dev2', '', null, null, null, 1, 1) r), '페이지 나눠 조회');
 select test.ok((select (f ->> 'total')::int = 2 and f -> 'groups' @> '[{"value":"서울","count":1},{"value":"","count":1}]'
                 from dbmerge_book_facets(:'t_dev2') f), '그룹별 건수');
 
-select (dbmerge_book_search(:'t_dev2', '길동', null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as hong \gset
+select (dbmerge_book_search(:'t_dev2', '길동', null, null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as hong \gset
 select dbmerge_book_update_row(:'t_dev2', :hong, '{"name":" 홍길순 ","memo":"수정","fixed_phone":"010-9999-9999"}');
 select test.ok((select r ->> 'name' = '홍길순' and r ->> 'memo' = '수정' and r ->> 'grp' = '서울' and r ->> 'fixed_phone' = '010-2000-0001'
                 from jsonb_array_elements(dbmerge_book_find(:'t_dev2', '["010-2000-0001"]')) r), '보낸 칸만 수정, 전화번호는 그대로');
 select test.err(format($$select dbmerge_book_update_row(%L, %s, '{"name":"x"}')$$, :'t_dev2', :admin_row), '찾을 수 없습니다', '남의 행 수정 불가');
 
-select (dbmerge_book_search(:'t_dev2', '0003', null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as lee \gset
+select (dbmerge_book_search(:'t_dev2', '0003', null, null, null, 0, 50) -> 'rows' -> 0 ->> 'row_id') as lee \gset
 select test.ok(dbmerge_book_set_group(:'t_dev2', format('[%s,%s,%s]', :hong, :lee, :admin_row)::jsonb, ' 부산 ') = 2, '그룹 일괄 변경 (내 행만)');
-select test.ok((dbmerge_book_search(:'t_dev2', '', '부산', null, 0, 50) ->> 'total')::int = 2, '바뀐 그룹으로 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '', '부산', null, null, 0, 50) ->> 'total')::int = 2, '바뀐 그룹으로 검색');
 reset role;
 select test.ok((select grp from dbmerge_book_rows where id = :admin_row) <> '부산', '남의 행 그룹은 그대로');
 set role anon;
-select test.err($$select _dbmerge_book_match('x', '', null, null)$$, 'permission denied', '검색 내부 함수 호출 차단');
+select test.err($$select _dbmerge_book_match('x', '', null, null, null)$$, 'permission denied', '검색 내부 함수 호출 차단');
+
+-- ── 수신거부 목록 ─────────────────────────────────────────────
+select test.err(format($$select dbmerge_optout_check(%L, '[]')$$, :'t_old2'), 'DB 저장 권한', '권한 없는 계정은 수신거부 사용 불가');
+select test.ok(dbmerge_optout_add(:'t_dev2', '[{"fixed_phone":"010-2000-0003","memo":" 문자 거부 요청 "},
+                                             {"fixed_phone":"02-123-4567"},
+                                             {"fixed_phone":"010-2000-0003","memo":"중복"}]') = 1, '정상 번호만 1건 등록');
+select test.ok(dbmerge_optout_add(:'t_dev2', '[{"fixed_phone":"010-2000-0003"}]') = 0, '이미 등록된 번호는 건너뜀');
+select test.ok(dbmerge_optout_check(:'t_dev2', '["010-2000-0001","010-2000-0003"]') = '["010-2000-0003"]', '번호 중 수신거부만 돌려줌');
+select test.ok(dbmerge_optout_check(:'t_admin', '["010-2000-0003"]') = '[]', '다른 계정 수신거부는 안 보임');
+select test.ok((select (l ->> 'total')::int = 1 and l -> 'rows' -> 0 ->> 'memo' = '문자 거부 요청'
+                from dbmerge_optout_list(:'t_dev2', '', 0, 50) l), '목록 (메모 앞뒤 공백 제거)');
+select test.ok((dbmerge_optout_list(:'t_dev2', '0003', 0, 50) ->> 'total')::int = 1
+           and (dbmerge_optout_list(:'t_dev2', '거부', 0, 50) ->> 'total')::int = 1
+           and (dbmerge_optout_list(:'t_dev2', '9999', 0, 50) ->> 'total')::int = 0, '번호·메모 검색');
+select test.ok((select r ->> 'optout' from jsonb_array_elements(dbmerge_book_search(:'t_dev2', '', null, null, null, 0, 50) -> 'rows') r
+                where r ->> 'fixed_phone' = '010-2000-0003') = 'true', '내 주소록에 수신거부 표시');
+select test.ok((dbmerge_book_search(:'t_dev2', '', null, null, false, 0, 50) ->> 'total')::int = 2
+           and (dbmerge_book_search(:'t_dev2', '', null, null, true, 0, 50) ->> 'total')::int = 1, '수신거부 제외 필터');
+select test.err('select * from dbmerge_optouts', 'permission denied', '수신거부 테이블 직접 조회 차단');
+
+reset role;
+update dbmerge_licenses set retention_hours = 1 where phone = '01022223333';
+update dbmerge_books set created_at = now() - interval '2 days' where license_id = (select id::text from dbmerge_licenses where phone = '01022223333');
+select dbmerge_purge_expired();
+select test.ok((select count(*) from dbmerge_optouts) = 1, '보관 기간이 지나도 수신거부는 삭제 안 함');
+update dbmerge_licenses set retention_hours = null where phone = '01022223333';
+insert into dbmerge_optouts (license_id, fixed_phone) values ('deleted-account', '010-1234-5678');
+select dbmerge_purge_expired();
+select test.ok((select count(*) from dbmerge_optouts where license_id = 'deleted-account') = 0, '계정이 없어진 수신거부는 정리');
+set role anon;
+
+select test.ok(dbmerge_optout_delete(:'t_dev2', '["010-2000-0003","010-0000-0000"]') = 1, '수신거부 해제');
+select test.ok(dbmerge_optout_check(:'t_dev2', '["010-2000-0003"]') = '[]', '해제 후 조회 안 됨');
 
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;

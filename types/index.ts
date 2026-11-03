@@ -87,4 +87,5 @@ export interface BookRow {
   note4: string;
   note5: string;
   source: string;
+  optout?: boolean;   // 수신거부 번호 (내 주소록 검색 결과에만)
 }

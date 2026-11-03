@@ -82,6 +82,17 @@ create table if not exists public.dbmerge_book_rows (
 create index if not exists dbmerge_book_rows_phone_idx on public.dbmerge_book_rows (license_id, fixed_phone);
 create index if not exists dbmerge_book_rows_book_idx  on public.dbmerge_book_rows (book_id);
 
+-- 수신거부 번호 (계정별). 보관 기간과 상관없이 자동 삭제하지 않음 (지워지면 다시 문자가 나갈 수 있음)
+create table if not exists public.dbmerge_optouts (
+  license_id  text not null,
+  fixed_phone text not null,
+  memo        text not null default '',
+  created_at  timestamptz not null default now(),
+  primary key (license_id, fixed_phone)
+);
+alter table public.dbmerge_optouts enable row level security;
+revoke all on public.dbmerge_optouts from anon, authenticated;
+
 -- 내 주소록 검색: 이름·번호 일부 검색을 빠르게 (trigram 인덱스)
 create extension if not exists pg_trgm with schema extensions;
 create index if not exists dbmerge_book_rows_name_trgm  on public.dbmerge_book_rows using gin (name extensions.gin_trgm_ops);
@@ -524,8 +535,9 @@ end $$;
 
 -- ── 내 주소록 (검색·수정) ─────────────────────────────────────
 
--- 검색 조건에 맞는 내 행. p_group·p_party가 null이면 전체, ''이면 빈 값인 행
-create or replace function public._dbmerge_book_match(p_license_id text, p_query text, p_group text, p_party text)
+-- 검색 조건에 맞는 내 행. p_group·p_party가 null이면 전체, ''이면 빈 값인 행. p_hide_optout이면 수신거부 번호 제외
+drop function if exists public._dbmerge_book_match(text, text, text, text);
+create or replace function public._dbmerge_book_match(p_license_id text, p_query text, p_group text, p_party text, p_hide_optout boolean)
 returns setof public.dbmerge_book_rows
 language sql stable
 set search_path = public, extensions
@@ -540,6 +552,8 @@ as $$
   where r.license_id = p_license_id
     and (p_group is null or r.grp = p_group)
     and (p_party is null or r.party_type = p_party)
+    and (not coalesce(p_hide_optout, false)
+         or not exists (select 1 from dbmerge_optouts o where o.license_id = p_license_id and o.fixed_phone = r.fixed_phone))
     and (q.raw = ''
       or r.name    ilike '%' || q.pat || '%'
       or r.memo    ilike '%' || q.pat || '%'
@@ -548,9 +562,10 @@ as $$
       or (q.raw ~ '^[0-9 -]+$' and length(q.digits) >= 2 and replace(r.fixed_phone, '-', '') like '%' || q.digits || '%'))
 $$;
 
--- 검색 + 페이지 (최대 200행씩). { total, rows: [...] }
+-- 검색 + 페이지 (최대 200행씩). { total, rows: [...] }. 행마다 수신거부 여부(optout) 포함
+drop function if exists public.dbmerge_book_search(text, text, text, text, int, int);
 create or replace function public.dbmerge_book_search(
-  p_token text, p_query text, p_group text, p_party text, p_offset int, p_limit int
+  p_token text, p_query text, p_group text, p_party text, p_hide_optout boolean, p_offset int, p_limit int
 )
 returns jsonb
 language plpgsql security definer
@@ -561,13 +576,14 @@ declare
   total int;
   rows  jsonb;
 begin
-  select count(*) into total from _dbmerge_book_match(v.id::text, p_query, p_group, p_party);
+  select count(*) into total from _dbmerge_book_match(v.id::text, p_query, p_group, p_party, p_hide_optout);
   select coalesce(jsonb_agg(x order by x.ord), '[]'::jsonb) into rows from (
     select row_number() over (order by m.name, m.fixed_phone, m.id) as ord,
            m.id as row_id, m.book_id, b.file_name, b.created_at as saved_at,
            m.fixed_phone, m.orig_phone, m.grp, m.name, m.memo, m.address, m.party_type,
-           m.note1, m.note2, m.note3, m.note4, m.note5, m.source
-    from _dbmerge_book_match(v.id::text, p_query, p_group, p_party) m
+           m.note1, m.note2, m.note3, m.note4, m.note5, m.source,
+           exists (select 1 from dbmerge_optouts o where o.license_id = m.license_id and o.fixed_phone = m.fixed_phone) as optout
+    from _dbmerge_book_match(v.id::text, p_query, p_group, p_party, p_hide_optout) m
     join dbmerge_books b on b.id = m.book_id
     order by m.name, m.fixed_phone, m.id
     offset greatest(coalesce(p_offset, 0), 0)
@@ -641,6 +657,97 @@ begin
   return n;
 end $$;
 
+-- ── 수신거부 목록 ─────────────────────────────────────────────
+
+-- 등록 (최대 1000개). [{ fixed_phone, memo }], 정리된 010 번호만. 이미 있으면 건너뜀. 새로 등록된 수 반환
+create or replace function public.dbmerge_optout_add(p_token text, p_items jsonb)
+returns integer
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+  n integer;
+begin
+  if jsonb_array_length(coalesce(p_items, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000개까지 등록할 수 있습니다.';
+  end if;
+  insert into dbmerge_optouts (license_id, fixed_phone, memo)
+  select distinct on (x.fixed_phone) v.id::text, x.fixed_phone, btrim(coalesce(x.memo, ''))
+  from jsonb_to_recordset(coalesce(p_items, '[]'::jsonb)) as x(fixed_phone text, memo text)
+  where x.fixed_phone ~ '^010-[0-9]{3,4}-[0-9]{4}$'
+  on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- 목록 (번호 일부·메모 검색, 최신순, 최대 200개씩). { total, rows: [{ fixed_phone, memo, created_at }] }
+create or replace function public.dbmerge_optout_list(p_token text, p_query text, p_offset int, p_limit int)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v      dbmerge_licenses := _dbmerge_store_auth(p_token);
+  q      text := btrim(coalesce(p_query, ''));
+  digits text := regexp_replace(coalesce(p_query, ''), '\D', '', 'g');
+  total  int;
+  rows   jsonb;
+begin
+  select count(*) into total from dbmerge_optouts o
+  where o.license_id = v.id::text
+    and (q = '' or (q ~ '^[0-9 -]+$' and replace(o.fixed_phone, '-', '') like '%' || digits || '%')
+         or strpos(o.memo, q) > 0);
+  select coalesce(jsonb_agg(x order by x.created_at desc, x.fixed_phone), '[]'::jsonb) into rows from (
+    select o.fixed_phone, o.memo, o.created_at from dbmerge_optouts o
+    where o.license_id = v.id::text
+      and (q = '' or (q ~ '^[0-9 -]+$' and replace(o.fixed_phone, '-', '') like '%' || digits || '%')
+           or strpos(o.memo, q) > 0)
+    order by o.created_at desc, o.fixed_phone
+    offset greatest(coalesce(p_offset, 0), 0)
+    limit least(greatest(coalesce(p_limit, 50), 1), 200)
+  ) x;
+  return jsonb_build_object('total', total, 'rows', rows);
+end $$;
+
+-- 해제 (최대 1000개). 해제된 수 반환
+create or replace function public.dbmerge_optout_delete(p_token text, p_phones jsonb)
+returns integer
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+  n integer;
+begin
+  if jsonb_array_length(coalesce(p_phones, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000개까지 해제할 수 있습니다.';
+  end if;
+  delete from dbmerge_optouts
+  where license_id = v.id::text and fixed_phone in (select jsonb_array_elements_text(coalesce(p_phones, '[]'::jsonb)));
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- 주어진 번호(최대 1000개) 중 수신거부인 번호만 돌려줌. 처리 결과·엑셀받기에서 표시·제외용
+create or replace function public.dbmerge_optout_check(p_token text, p_phones jsonb)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+begin
+  if jsonb_array_length(coalesce(p_phones, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000개까지 조회할 수 있습니다.';
+  end if;
+  return coalesce((
+    select jsonb_agg(o.fixed_phone order by o.fixed_phone) from dbmerge_optouts o
+    where o.license_id = v.id::text
+      and o.fixed_phone in (select jsonb_array_elements_text(coalesce(p_phones, '[]'::jsonb)))
+  ), '[]'::jsonb);
+end $$;
+
 -- ── 만료 보관 데이터 삭제 ─────────────────────────────────────
 -- 매시간 예약 작업으로 실행. 주소록 정리 함수도 실행 전에 호출하므로 예약 작업이 없어도 만료분은 쓰이지 않음
 create or replace function public.dbmerge_purge_expired()
@@ -661,6 +768,7 @@ begin
             and l.retention_hours is not null
             and b.created_at + make_interval(hours => l.retention_hours) <= now());
   get diagnostics n = row_count;
+  delete from dbmerge_optouts o where not exists (select 1 from dbmerge_licenses l where l.id::text = o.license_id);
   return n;
 end $$;
 
@@ -686,7 +794,7 @@ revoke all on function public._dbmerge_use_device(public.dbmerge_licenses, text)
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
 revoke all on function public.dbmerge_purge_expired()                            from public, anon, authenticated;
 revoke all on function public._dbmerge_store_auth(text)                          from public, anon, authenticated;
-revoke all on function public._dbmerge_book_match(text, text, text, text)        from public, anon, authenticated;
+revoke all on function public._dbmerge_book_match(text, text, text, text, boolean) from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;
 revoke all on function public.dbmerge_login(text, text, text)                             from public;
@@ -697,7 +805,11 @@ revoke all on function public.dbmerge_get_jobs(text)                            
 revoke all on function public.dbmerge_book_find(text, jsonb)                              from public;
 revoke all on function public.dbmerge_book_save(text, uuid, text, jsonb)                  from public;
 revoke all on function public.dbmerge_book_delete_rows(text, jsonb)                       from public;
-revoke all on function public.dbmerge_book_search(text, text, text, text, int, int)       from public;
+revoke all on function public.dbmerge_book_search(text, text, text, text, boolean, int, int) from public;
+revoke all on function public.dbmerge_optout_add(text, jsonb)                             from public;
+revoke all on function public.dbmerge_optout_list(text, text, int, int)                   from public;
+revoke all on function public.dbmerge_optout_delete(text, jsonb)                          from public;
+revoke all on function public.dbmerge_optout_check(text, jsonb)                           from public;
 revoke all on function public.dbmerge_book_facets(text)                                   from public;
 revoke all on function public.dbmerge_book_update_row(text, bigint, jsonb)                from public;
 revoke all on function public.dbmerge_book_set_group(text, jsonb, text)                   from public;
@@ -711,7 +823,11 @@ grant execute on function public.dbmerge_get_jobs(text)                         
 grant execute on function public.dbmerge_book_find(text, jsonb)                           to anon, authenticated;
 grant execute on function public.dbmerge_book_save(text, uuid, text, jsonb)               to anon, authenticated;
 grant execute on function public.dbmerge_book_delete_rows(text, jsonb)                    to anon, authenticated;
-grant execute on function public.dbmerge_book_search(text, text, text, text, int, int)    to anon, authenticated;
+grant execute on function public.dbmerge_book_search(text, text, text, text, boolean, int, int) to anon, authenticated;
+grant execute on function public.dbmerge_optout_add(text, jsonb)                          to anon, authenticated;
+grant execute on function public.dbmerge_optout_list(text, text, int, int)                to anon, authenticated;
+grant execute on function public.dbmerge_optout_delete(text, jsonb)                       to anon, authenticated;
+grant execute on function public.dbmerge_optout_check(text, jsonb)                        to anon, authenticated;
 grant execute on function public.dbmerge_book_facets(text)                                to anon, authenticated;
 grant execute on function public.dbmerge_book_update_row(text, bigint, jsonb)             to anon, authenticated;
 grant execute on function public.dbmerge_book_set_group(text, jsonb, text)                to anon, authenticated;
