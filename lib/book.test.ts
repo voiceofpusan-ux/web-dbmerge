@@ -78,9 +78,9 @@ describe('내 주소록 검색·수정', () => {
   it('검색 조건을 그대로 서버에 전달', async () => {
     rpc.mockResolvedValue({ data: { total: 1, rows: [{ row_id: 3 }] }, error: null });
     const { searchBook } = await import('./book');
-    expect(await searchBook({ query: '길동', group: null, party: '' }, 50, 50)).toEqual({ total: 1, rows: [{ row_id: 3 }] });
+    expect(await searchBook({ query: '길동', group: null, party: '', hideOptout: true }, 50, 50)).toEqual({ total: 1, rows: [{ row_id: 3 }] });
     expect(rpc).toHaveBeenCalledWith('dbmerge_book_search', {
-      p_token: 'tok', p_query: '길동', p_group: null, p_party: '', p_offset: 50, p_limit: 50,
+      p_token: 'tok', p_query: '길동', p_group: null, p_party: '', p_hide_optout: true, p_offset: 50, p_limit: 50,
     });
   });
 
