@@ -73,3 +73,29 @@ describe('deleteBookRows', () => {
     expect(rpc).toHaveBeenCalledWith('dbmerge_book_delete_rows', { p_token: 'tok', p_row_ids: [5, 9] });
   });
 });
+
+describe('내 주소록 검색·수정', () => {
+  it('검색 조건을 그대로 서버에 전달', async () => {
+    rpc.mockResolvedValue({ data: { total: 1, rows: [{ row_id: 3 }] }, error: null });
+    const { searchBook } = await import('./book');
+    expect(await searchBook({ query: '길동', group: null, party: '' }, 50, 50)).toEqual({ total: 1, rows: [{ row_id: 3 }] });
+    expect(rpc).toHaveBeenCalledWith('dbmerge_book_search', {
+      p_token: 'tok', p_query: '길동', p_group: null, p_party: '', p_offset: 50, p_limit: 50,
+    });
+  });
+
+  it('수정·그룹 변경 요청', async () => {
+    rpc.mockResolvedValue({ data: 2, error: null });
+    const { updateBookRow, setBookGroup } = await import('./book');
+    await updateBookRow(7, { name: '홍길순' });
+    expect(rpc).toHaveBeenLastCalledWith('dbmerge_book_update_row', { p_token: 'tok', p_row_id: 7, p_fields: { name: '홍길순' } });
+    expect(await setBookGroup([1, 2], '부산')).toBe(2);
+    expect(rpc).toHaveBeenLastCalledWith('dbmerge_book_set_group', { p_token: 'tok', p_row_ids: [1, 2], p_group: '부산' });
+  });
+
+  it('서버 오류 메시지를 그대로 전달', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: '수정할 행을 찾을 수 없습니다.' } });
+    const { updateBookRow } = await import('./book');
+    await expect(updateBookRow(1, { name: 'x' })).rejects.toThrow('수정할 행을 찾을 수 없습니다.');
+  });
+});

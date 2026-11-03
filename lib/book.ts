@@ -98,3 +98,59 @@ export async function deleteBookRows(rowIds: number[]): Promise<number> {
   if (error) throw new Error(error.message);
   return data as number;
 }
+
+// ── 내 주소록 (검색·수정) ─────────────────────────────────────
+
+export interface BookFilter {
+  query: string;
+  group: string | null;   // null = 전체, '' = 그룹 없음
+  party: string | null;   // null = 전체, '' = 당원구분 없음
+}
+
+export interface Facet { value: string; count: number }
+
+/** 검색 + 페이지. 서버가 최대 200행씩 돌려줌 */
+export async function searchBook(
+  filter: BookFilter, offset: number, limit: number,
+): Promise<{ total: number; rows: BookRow[] }> {
+  if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const { data, error } = await supabase.rpc('dbmerge_book_search', {
+    p_token:  requireToken(),
+    p_query:  filter.query,
+    p_group:  filter.group,
+    p_party:  filter.party,
+    p_offset: offset,
+    p_limit:  limit,
+  });
+  if (error) throw new Error(error.message);
+  return data as { total: number; rows: BookRow[] };
+}
+
+/** 필터 선택지: 그룹·당원구분별 건수 */
+export async function bookFacets(): Promise<{ total: number; groups: Facet[]; parties: Facet[] }> {
+  if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const { data, error } = await supabase.rpc('dbmerge_book_facets', { p_token: requireToken() });
+  if (error) throw new Error(error.message);
+  return data as { total: number; groups: Facet[]; parties: Facet[] };
+}
+
+export type EditableField = 'grp' | 'name' | 'memo' | 'address' | 'party_type' | 'note1' | 'note2' | 'note3' | 'note4' | 'note5';
+
+/** 행 수정 (전화번호는 바꿀 수 없음) */
+export async function updateBookRow(rowId: number, fields: Partial<Record<EditableField, string>>): Promise<void> {
+  if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const { error } = await supabase.rpc('dbmerge_book_update_row', {
+    p_token: requireToken(), p_row_id: rowId, p_fields: fields,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** 고른 행의 그룹 일괄 변경 */
+export async function setBookGroup(rowIds: number[], group: string): Promise<number> {
+  if (!supabase) throw new Error('Supabase가 설정되지 않았습니다.');
+  const { data, error } = await supabase.rpc('dbmerge_book_set_group', {
+    p_token: requireToken(), p_row_ids: rowIds, p_group: group,
+  });
+  if (error) throw new Error(error.message);
+  return data as number;
+}
