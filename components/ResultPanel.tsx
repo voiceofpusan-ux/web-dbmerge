@@ -11,6 +11,7 @@ interface Props {
   fileNames: string[];
   onClose: () => void;
   onLicenseRefresh: () => void;
+  exportPrefix?: string;   // 엑셀 파일명 앞부분 (기본 "번호통합")
 }
 
 const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
@@ -34,7 +35,7 @@ const DISPLAY_COLS: { key: keyof RowRecord; label: string }[] = [
   { key: '긴이름나머지', label: '긴이름나머지' },
 ];
 
-export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh }: Props) {
+export default function ResultPanel({ result, fileNames, onClose, onLicenseRefresh, exportPrefix }: Props) {
   const [step,    setStep]    = useState<'idle' | 'checking' | 'confirm' | 'downloading'>('idle');
   const [session, setSession] = useState<Session | null>(null);
   const [charged, setCharged] = useState(false);   // 이 결과로 이미 차감했으면 다시 받을 때 추가 차감 없음
@@ -44,7 +45,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
 
   // 엑셀받기 — 서버에서 최신 잔여건수를 받아 확인 창 표시 (Supabase 미설정 시 차감 없이 바로 받기)
   const handleExcelClick = async () => {
-    if (!licConfigured) { exportExcel(uniqueRows, allRows); return; }
+    if (!licConfigured) { exportExcel(uniqueRows, allRows, exportPrefix); return; }
     setStep('checking');
     const s = await refreshSession();
     onLicenseRefresh();
@@ -60,7 +61,7 @@ export default function ResultPanel({ result, fileNames, onClose, onLicenseRefre
         await chargeExport(result, fileNames);
         setCharged(true);
       }
-      exportExcel(uniqueRows, allRows);
+      exportExcel(uniqueRows, allRows, exportPrefix);
       const s = await refreshSession();
       onLicenseRefresh();
       setNotice(

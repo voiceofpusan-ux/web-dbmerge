@@ -39,6 +39,9 @@ export default function HistoryPage() {
               <div key={job.id} className="bg-white rounded-xl border shadow-sm flex items-center gap-4 px-5 py-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-800">
+                    <span className={`mr-2 px-1.5 py-0.5 rounded text-xs ${job.kind === 'book' ? 'bg-purple-50 text-purple-700' : 'bg-blue-50 text-blue-700'}`}>
+                      {job.kind === 'book' ? 'DB 정리' : '엑셀받기'}
+                    </span>
                     {new Date(job.created_at).toLocaleString('ko-KR')}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5 truncate">
@@ -49,8 +52,12 @@ export default function HistoryPage() {
                 <div className="flex gap-2 text-xs flex-shrink-0">
                   <Chip label="차감" value={job.unique_count} color="blue" />
                   <Chip label="전체" value={job.total}        color="gray" />
-                  <Chip label="중복" value={job.duplicate}    color="orange" />
-                  <Chip label="오류" value={job.error}        color="red" />
+                  {job.kind !== 'book' && (
+                    <>
+                      <Chip label="중복" value={job.duplicate} color="orange" />
+                      <Chip label="오류" value={job.error}     color="red" />
+                    </>
+                  )}
                 </div>
               </div>
             ))}

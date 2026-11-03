@@ -1,28 +1,41 @@
 'use client';
+// 업로드·처리·결과 화면. 엑셀 정리(/)와 주소록 정리(/book) 두 모드로 사용
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { SheetEntry, ProcessResult, Session } from '@/types';
 import UploadPanel from '@/components/UploadPanel';
 import ResultPanel from '@/components/ResultPanel';
 import LicenseDialog from '@/components/LicenseDialog';
+import BookPanel from '@/components/BookPanel';
 import { process as processData } from '@/lib/deduplicator';
 import { getSession, retentionLabel, isConfigured as licConfigured } from '@/lib/license';
 import { isConfigured as dbConfigured } from '@/lib/supabase';
 
-export default function Home() {
+export default function Workspace({ mode }: { mode: 'excel' | 'book' }) {
   const [sheets,      setSheets]      = useState<SheetEntry[]>([]);
   const [selectedId,  setSelectedId]  = useState<string | null>(null);
   const [result,      setResult]      = useState<ProcessResult | null>(null);
   const [processing,  setProcessing]  = useState(false);
-  const [showAccount, setShowAccount] = useState(() => licConfigured && !getSession());
-  const [session,     setSession]     = useState<Session | null>(getSession);
+  const [showAccount, setShowAccount] = useState(false);
+  const [session,     setSession]     = useState<Session | null>(null);
   const [applyNames,  setApplyNames]  = useState(false);
   const [spaceCount,  setSpaceCount]  = useState(3);
 
   const refreshSession = useCallback(() => {
     setSession(getSession());
   }, []);
+
+  // 로그인 정보는 브라우저 저장소에 있으므로 화면이 뜬 뒤에 읽음 (서버 렌더링 결과와 어긋나지 않게)
+  useEffect(() => {
+    const s = getSession();
+    setSession(s);
+    if (licConfigured && !s) setShowAccount(true);
+  }, []);
+
+  // 주소록 정리는 DB 저장 권한 계정과 슈퍼어드민만
+  const canStore = !!session && (!!session.can_store || session.is_admin);
+  const bookBlocked = mode === 'book' && licConfigured && !!session && !canStore;
 
   const selectedSheet = sheets.find((s) => s.id === selectedId);
   const fileNames = [...new Set(sheets.map((s) => s.fileName))];
@@ -63,8 +76,18 @@ export default function Home() {
     <div className="min-h-screen">
       {/* 헤더 */}
       <header className="bg-white border-b px-6 py-3 flex items-center justify-between shadow-sm">
-        <h1 className="text-base font-bold text-gray-800">연락처 엑셀 통합 정제 도구</h1>
+        <h1 className="text-base font-bold text-gray-800">
+          {mode === 'book' ? '주소록 정리' : '연락처 엑셀 통합 정제 도구'}
+        </h1>
         <div className="flex items-center gap-3">
+          {canStore && (
+            <Link
+              href={mode === 'book' ? '/' : '/book'}
+              className="text-sm px-3 py-1.5 border border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50"
+            >
+              {mode === 'book' ? '엑셀 정리' : '주소록 정리'}
+            </Link>
+          )}
           {licConfigured && (
             <span className={`text-sm ${quotaColor()}`}>{quotaText()}</span>
           )}
@@ -92,7 +115,11 @@ export default function Home() {
       )}
 
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
-        {!result ? (
+        {bookBlocked ? (
+          <div className="bg-white rounded-xl border p-12 text-center text-gray-500 text-sm">
+            DB 저장 권한이 없습니다. 주소록 정리를 쓰려면 관리자에게 권한을 요청하세요.
+          </div>
+        ) : !result ? (
           <>
             <div className="flex gap-4 items-start">
               {/* 업로드 패널 */}
@@ -180,15 +207,24 @@ export default function Home() {
             </div>
           </>
         ) : (
-          <div className="bg-white rounded-xl border p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">처리 결과</h2>
-            <ResultPanel
-              result={result}
-              fileNames={fileNames}
-              onClose={() => setResult(null)}
-              onLicenseRefresh={refreshSession}
-            />
-          </div>
+          <>
+            {mode === 'book' && (
+              <div className="bg-white rounded-xl border p-5 shadow-sm">
+                <h2 className="text-sm font-semibold text-gray-700 mb-4">내 DB와 비교</h2>
+                <BookPanel result={result} fileNames={fileNames} onLicenseRefresh={refreshSession} />
+              </div>
+            )}
+            <div className="bg-white rounded-xl border p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-700 mb-4">처리 결과</h2>
+              <ResultPanel
+                result={result}
+                fileNames={fileNames}
+                onClose={() => setResult(null)}
+                onLicenseRefresh={refreshSession}
+                exportPrefix={mode === 'book' ? `${session?.phone || '주소록'}_주소록정리` : undefined}
+              />
+            </div>
+          </>
         )}
       </main>
 
