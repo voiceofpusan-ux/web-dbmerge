@@ -88,6 +88,11 @@ export default function Workspace({ mode }: { mode: 'excel' | 'book' }) {
               {mode === 'book' ? '엑셀 정리' : '주소록 정리'}
             </Link>
           )}
+          {canStore && (
+            <Link href="/contacts" className="text-sm px-3 py-1.5 border border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50">
+              내 주소록
+            </Link>
+          )}
           {licConfigured && (
             <span className={`text-sm ${quotaColor()}`}>{quotaText()}</span>
           )}
