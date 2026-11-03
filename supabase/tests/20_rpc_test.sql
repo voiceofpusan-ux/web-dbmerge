@@ -194,6 +194,7 @@ select test.ok((dbmerge_book_search(:'t_dev2', '', null, null, 0, 50) ->> 'total
 select test.ok((dbmerge_book_search(:'t_dev2', '길동', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '홍길동', '이름 일부 검색');
 select test.ok((dbmerge_book_search(:'t_dev2', '0003', null, null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '번호 일부 검색');
 select test.ok((dbmerge_book_search(:'t_dev2', '010-2000-0003', null, null, 0, 50) ->> 'total')::int = 1, '하이픈 넣은 번호 검색');
+select test.ok((dbmerge_book_search(:'t_dev2', '이영희00', null, null, 0, 50) ->> 'total')::int = 0, '글자 섞인 검색어는 숫자만 떼어 번호 검색하지 않음');
 select test.ok((dbmerge_book_search(:'t_dev2', '', '서울', null, 0, 50) ->> 'total')::int = 1, '그룹 필터');
 select test.ok((dbmerge_book_search(:'t_dev2', '', '', null, 0, 50) -> 'rows' -> 0 ->> 'name') = '이영희', '그룹 없음 필터');
 select test.ok((dbmerge_book_search(:'t_dev2', '%', null, null, 0, 50) ->> 'total')::int = 0, '% 는 글자 그대로 검색');

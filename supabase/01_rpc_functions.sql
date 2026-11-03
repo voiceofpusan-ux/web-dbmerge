@@ -544,7 +544,8 @@ as $$
       or r.name    ilike '%' || q.pat || '%'
       or r.memo    ilike '%' || q.pat || '%'
       or r.address ilike '%' || q.pat || '%'
-      or (length(q.digits) >= 2 and replace(r.fixed_phone, '-', '') like '%' || q.digits || '%'))
+      -- 번호 검색은 검색어가 숫자(하이픈·공백 허용)로만 됐을 때만. "사람05"의 05로 번호를 찾지 않게
+      or (q.raw ~ '^[0-9 -]+$' and length(q.digits) >= 2 and replace(r.fixed_phone, '-', '') like '%' || q.digits || '%'))
 $$;
 
 -- 검색 + 페이지 (최대 200행씩). { total, rows: [...] }
