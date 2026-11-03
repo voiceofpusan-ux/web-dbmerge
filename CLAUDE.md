@@ -18,6 +18,8 @@ app/
   page.tsx            # 엑셀 정리 (Workspace mode="excel")
   book/
     page.tsx          # 주소록 정리 (Workspace mode="book", DB 저장 권한 계정)
+  contacts/
+    page.tsx          # 내 주소록: DB 연락처 검색·필터·수정·그룹 일괄 변경·삭제
   history/
     page.tsx          # 사용 이력(엑셀받기 차감 기록) 조회 페이지
 components/
@@ -32,7 +34,7 @@ lib/
   deduplicator.ts     # 시트 통합 + 중복제거 처리
   exporter.ts         # xlsx 다운로드 (정제결과 위 + 중복 행 아래, 단일 시트)
   db.ts               # 엑셀받기 건수 차감(chargeExport) + 사용 이력 조회
-  book.ts             # 주소록 정리 서버 호출 (findExisting / saveBook / deleteBookRows)
+  book.ts             # 주소록 서버 호출 (정리: findExisting / saveBook / deleteBookRows, 내 주소록: searchBook / bookFacets / updateBookRow / setBookGroup)
   license.ts          # Supabase 라이선스 조회/등록/차감
   supabase.ts         # Supabase 클라이언트 초기화
   machineId.ts        # localStorage 기기 ID (UUID)
@@ -60,6 +62,12 @@ types/
    - 신규 번호 저장, **신규 건수만큼 차감**. 기존 번호는 빈 칸만 채움(기존 값 유지, 차감 없음)
    - 사용 이력에 `kind = 'book'`으로 묶음당 한 줄 누적
 5. **엑셀받기** → 엑셀 정리와 같은 확인 창·차감(정제결과 건수), 파일명 `아이디_주소록정리_YYYYMMDD_HHMMSS.xlsx`
+
+### 내 주소록 (`/contacts`, DB 저장 권한 계정·슈퍼어드민)
+- 검색: 이름·메모·주소 일부(대소문자 무시), 번호 일부(검색어가 숫자·하이픈·공백으로만 됐을 때만) + 그룹·당원구분 필터
+- 50건씩 페이지, 필터 선택지에 값별 건수 표시
+- 행 수정(바뀐 칸만 전송, 전화번호는 변경 불가), 여러 행 선택 후 그룹 일괄 변경·삭제. 차감 없음
+- 내 DB에는 같은 번호가 생기지 않음(DB 정리가 기존 번호를 새로 저장하지 않음) → 중복 검토는 주소록 정리 화면에서만
 
 ## 컬럼 규칙
 
@@ -168,7 +176,11 @@ SQL은 `supabase/`에 있고, 대시보드 SQL Editor에서 순서대로 실행�
 | `dbmerge_get_jobs` | 내 사용 이력 조회 (`kind`: excel / book) |
 | `dbmerge_book_find` | 주소록 정리: 내 DB에서 같은 번호 행 모두 조회 (최대 1000개씩) |
 | `dbmerge_book_save` | 주소록 정리: 신규 저장(신규 건수 차감) + 기존 번호 빈 칸 채움 (1000행씩) |
-| `dbmerge_book_delete_rows` | 주소록 정리: 고른 내 DB 행 삭제 |
+| `dbmerge_book_delete_rows` | 주소록 정리·내 주소록: 고른 내 DB 행 삭제 |
+| `dbmerge_book_search` | 내 주소록: 검색 + 필터 + 페이지 (최대 200행) → `{ total, rows }` |
+| `dbmerge_book_facets` | 내 주소록: 그룹·당원구분별 건수, 전체 건수 |
+| `dbmerge_book_update_row` | 내 주소록: 행 수정 (전화번호 제외) |
+| `dbmerge_book_set_group` | 내 주소록: 고른 행 그룹 일괄 변경 (최대 1000행) |
 
 - 세션: `dbmerge_sessions`에 토큰의 SHA-256과 기기(machine_id)만 저장, 30일 만료. 무효 토큰은 errcode `28000`
 - 접속 컴퓨터: `dbmerge_licenses.max_devices`(기본 1) + `dbmerge_devices`(계정별 기기 목록, 처음 등록·마지막 접속)
