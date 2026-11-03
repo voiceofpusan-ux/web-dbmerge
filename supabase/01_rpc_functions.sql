@@ -56,6 +56,10 @@ create table if not exists public.dbmerge_books (
 drop index if exists public.dbmerge_books_license_idx;
 alter table public.dbmerge_books drop column if exists expires_at;
 create index if not exists dbmerge_books_license_created_idx on public.dbmerge_books (license_id, created_at);
+-- 묶음의 사용 이력(DB 정리 차감 기록). 여러 번에 나눠 저장해도 한 줄로 누적
+alter table public.dbmerge_books add column if not exists job_id uuid;
+-- 사용 이력 종류: excel(엑셀받기) / book(DB 정리)
+alter table public.dbmerge_jobs add column if not exists kind text not null default 'excel';
 
 create table if not exists public.dbmerge_book_rows (
   id          bigint generated always as identity primary key,
@@ -335,6 +339,184 @@ begin
     select * from dbmerge_jobs where user_id::text = v.id::text order by created_at desc;
 end $$;
 
+-- ── 주소록 정리 (DB 저장 권한 계정) ───────────────────────────
+
+-- DB 저장 권한 확인(슈퍼어드민은 항상 허용) + 보관 기간 지난 데이터 먼저 정리
+create or replace function public._dbmerge_store_auth(p_token text)
+returns public.dbmerge_licenses
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_auth(p_token);
+begin
+  if not (coalesce(v.can_store, false) or coalesce(v.is_admin, false)) then
+    raise exception 'DB 저장 권한이 없습니다. 관리자에게 문의하세요.';
+  end if;
+  perform dbmerge_purge_expired();
+  return v;
+end $$;
+
+-- 내 DB에서 번호(정리된 번호, 최대 1000개)와 같은 행을 모두 찾음. 중복 검토 화면용
+create or replace function public.dbmerge_book_find(p_token text, p_phones jsonb)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+begin
+  if jsonb_array_length(coalesce(p_phones, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000개까지 조회할 수 있습니다.';
+  end if;
+  return coalesce((
+    select jsonb_agg(jsonb_build_object(
+             'row_id', r.id, 'book_id', r.book_id, 'file_name', b.file_name, 'saved_at', b.created_at,
+             'fixed_phone', r.fixed_phone, 'orig_phone', r.orig_phone, 'grp', r.grp, 'name', r.name,
+             'memo', r.memo, 'address', r.address, 'party_type', r.party_type,
+             'note1', r.note1, 'note2', r.note2, 'note3', r.note3, 'note4', r.note4, 'note5', r.note5,
+             'source', r.source)
+           order by r.fixed_phone, b.created_at, r.id)
+    from dbmerge_book_rows r
+    join dbmerge_books b on b.id = r.book_id
+    where r.license_id = v.id::text
+      and r.fixed_phone in (select jsonb_array_elements_text(p_phones))
+  ), '[]'::jsonb);
+end $$;
+
+-- DB 정리: 신규 번호는 저장(신규 건수만큼 차감), 이미 있는 번호는 빈 칸만 채움
+-- 1000행씩 나눠 호출. 첫 호출은 p_book_id = null → 묶음 생성 후 id 반환, 이후 호출은 그 id 사용
+create or replace function public.dbmerge_book_save(p_token text, p_book_id uuid, p_file_name text, p_rows jsonb)
+returns jsonb
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v         dbmerge_licenses := _dbmerge_store_auth(p_token);
+  bid       uuid := p_book_id;
+  jid       uuid;
+  n_new     int;
+  n_fill    int;
+  remaining int;
+begin
+  if jsonb_array_length(coalesce(p_rows, '[]'::jsonb)) > 1000 then
+    raise exception '한 번에 1000행까지 저장할 수 있습니다.';
+  end if;
+
+  -- 같은 계정이 동시에 저장해도 중복 판단·차감이 엇갈리지 않게 계정 행 잠금
+  perform 1 from dbmerge_licenses where id = v.id for update;
+
+  if bid is not null and not exists (select 1 from dbmerge_books where id = bid and license_id = v.id::text) then
+    raise exception '저장 중인 묶음을 찾을 수 없습니다. 다시 시도하세요.';
+  end if;
+
+  -- 이번 묶음의 행 (같은 번호는 첫 행만, 빈 번호 제외)
+  create temp table if not exists _dbmerge_in (
+    fixed_phone text, orig_phone text, grp text, name text, memo text, address text, party_type text,
+    note1 text, note2 text, note3 text, note4 text, note5 text, source text
+  ) on commit drop;
+  truncate _dbmerge_in;
+  insert into _dbmerge_in
+  select distinct on (x.fixed_phone)
+         x.fixed_phone, coalesce(x.orig_phone, ''), coalesce(x.grp, ''), coalesce(x.name, ''), coalesce(x.memo, ''),
+         coalesce(x.address, ''), coalesce(x.party_type, ''), coalesce(x.note1, ''), coalesce(x.note2, ''),
+         coalesce(x.note3, ''), coalesce(x.note4, ''), coalesce(x.note5, ''), coalesce(x.source, '')
+  from jsonb_to_recordset(coalesce(p_rows, '[]'::jsonb)) as x(
+         fixed_phone text, orig_phone text, grp text, name text, memo text, address text, party_type text,
+         note1 text, note2 text, note3 text, note4 text, note5 text, source text)
+  where coalesce(x.fixed_phone, '') <> ''
+  order by x.fixed_phone;
+
+  select count(*) into n_new from _dbmerge_in i
+  where not exists (select 1 from dbmerge_book_rows r where r.license_id = v.id::text and r.fixed_phone = i.fixed_phone);
+
+  -- 신규 건수만큼 차감 (슈퍼어드민 제외)
+  if n_new > 0 and not coalesce(v.is_admin, false) then
+    update dbmerge_licenses set used = used + n_new where id = v.id and used + n_new <= quota;
+    if not found then
+      select quota - used into remaining from dbmerge_licenses where id = v.id;
+      raise exception E'잔여 건수가 부족합니다.\n잔여: %건  /  필요: %건',
+        to_char(remaining, 'FM999,999,999,990'), to_char(n_new, 'FM999,999,999,990');
+    end if;
+  end if;
+
+  -- 묶음과 사용 이력(DB 정리) 준비
+  if bid is null then
+    insert into dbmerge_jobs (user_id, total, unique_count, duplicate, converted, error, file_names, kind)
+    select r.user_id, 0, 0, 0, 0, 0, r.file_names, 'book'
+    from jsonb_populate_record(null::dbmerge_jobs, jsonb_build_object(
+           'user_id', v.id::text, 'file_names', jsonb_build_array(coalesce(p_file_name, '')))) r
+    returning id into jid;
+    insert into dbmerge_books (license_id, file_name, row_count, job_id)
+    values (v.id::text, coalesce(p_file_name, ''), 0, jid)
+    returning id into bid;
+  else
+    select job_id into jid from dbmerge_books where id = bid;
+  end if;
+
+  -- 이미 있는 번호: 빈 칸만 이번 행 값으로 채움 (기존 값은 덮어쓰지 않음)
+  update dbmerge_book_rows r set
+    orig_phone = case when r.orig_phone = '' then i.orig_phone else r.orig_phone end,
+    grp        = case when r.grp        = '' then i.grp        else r.grp        end,
+    name       = case when r.name       = '' then i.name       else r.name       end,
+    memo       = case when r.memo       = '' then i.memo       else r.memo       end,
+    address    = case when r.address    = '' then i.address    else r.address    end,
+    party_type = case when r.party_type = '' then i.party_type else r.party_type end,
+    note1      = case when r.note1      = '' then i.note1      else r.note1      end,
+    note2      = case when r.note2      = '' then i.note2      else r.note2      end,
+    note3      = case when r.note3      = '' then i.note3      else r.note3      end,
+    note4      = case when r.note4      = '' then i.note4      else r.note4      end,
+    note5      = case when r.note5      = '' then i.note5      else r.note5      end
+  from _dbmerge_in i
+  where r.license_id = v.id::text and r.fixed_phone = i.fixed_phone
+    and ((r.orig_phone = '' and i.orig_phone <> '') or (r.grp = '' and i.grp <> '') or (r.name = '' and i.name <> '')
+      or (r.memo = '' and i.memo <> '') or (r.address = '' and i.address <> '') or (r.party_type = '' and i.party_type <> '')
+      or (r.note1 = '' and i.note1 <> '') or (r.note2 = '' and i.note2 <> '') or (r.note3 = '' and i.note3 <> '')
+      or (r.note4 = '' and i.note4 <> '') or (r.note5 = '' and i.note5 <> ''));
+  get diagnostics n_fill = row_count;
+
+  -- 신규 번호 저장
+  insert into dbmerge_book_rows (book_id, license_id, fixed_phone, orig_phone, grp, name, memo, address, party_type,
+                                 note1, note2, note3, note4, note5, source)
+  select bid, v.id::text, i.fixed_phone, i.orig_phone, i.grp, i.name, i.memo, i.address, i.party_type,
+         i.note1, i.note2, i.note3, i.note4, i.note5, i.source
+  from _dbmerge_in i
+  where not exists (select 1 from dbmerge_book_rows r where r.license_id = v.id::text and r.fixed_phone = i.fixed_phone);
+
+  update dbmerge_books set row_count = row_count + n_new where id = bid;
+  update dbmerge_jobs set total = total + (select count(*) from _dbmerge_in), unique_count = unique_count + n_new
+  where id = jid;
+
+  return jsonb_build_object('book_id', bid, 'inserted', n_new, 'filled', n_fill);
+end $$;
+
+-- 중복 검토 후 사용자가 고른 DB 행 삭제 (내 행만)
+create or replace function public.dbmerge_book_delete_rows(p_token text, p_row_ids jsonb)
+returns integer
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  v dbmerge_licenses := _dbmerge_store_auth(p_token);
+  n integer;
+begin
+  -- 데이터 변경 CTE(upd)는 참조하지 않아도 실행됨
+  with del as (
+    delete from dbmerge_book_rows
+    where license_id = v.id::text
+      and id in (select (jsonb_array_elements_text(coalesce(p_row_ids, '[]'::jsonb)))::bigint)
+    returning book_id
+  ),
+  cnt as (select book_id, count(*)::int as c from del group by book_id),
+  upd as (
+    update dbmerge_books b set row_count = greatest(0, b.row_count - cnt.c)
+    from cnt where b.id = cnt.book_id
+    returning 1
+  )
+  select coalesce(sum(c), 0)::int into n from cnt;
+  return n;
+end $$;
+
 -- ── 만료 보관 데이터 삭제 ─────────────────────────────────────
 -- 매시간 예약 작업으로 실행. 주소록 정리 함수도 실행 전에 호출하므로 예약 작업이 없어도 만료분은 쓰이지 않음
 create or replace function public.dbmerge_purge_expired()
@@ -379,6 +561,7 @@ revoke all on function public._dbmerge_new_session(text, text)                  
 revoke all on function public._dbmerge_use_device(public.dbmerge_licenses, text) from public, anon, authenticated;
 revoke all on function public._dbmerge_auth(text)                                from public, anon, authenticated;
 revoke all on function public.dbmerge_purge_expired()                            from public, anon, authenticated;
+revoke all on function public._dbmerge_store_auth(text)                          from public, anon, authenticated;
 
 revoke all on function public.dbmerge_register(text, text, text, text)                    from public;
 revoke all on function public.dbmerge_login(text, text, text)                             from public;
@@ -386,6 +569,9 @@ revoke all on function public.dbmerge_me(text)                                  
 revoke all on function public.dbmerge_logout(text)                                        from public;
 revoke all on function public.dbmerge_start_job(text, int, int, int, int, int, jsonb)    from public;
 revoke all on function public.dbmerge_get_jobs(text)                                      from public;
+revoke all on function public.dbmerge_book_find(text, jsonb)                              from public;
+revoke all on function public.dbmerge_book_save(text, uuid, text, jsonb)                  from public;
+revoke all on function public.dbmerge_book_delete_rows(text, jsonb)                       from public;
 
 grant execute on function public.dbmerge_register(text, text, text, text)                 to anon, authenticated;
 grant execute on function public.dbmerge_login(text, text, text)                          to anon, authenticated;
@@ -393,3 +579,6 @@ grant execute on function public.dbmerge_me(text)                               
 grant execute on function public.dbmerge_logout(text)                                     to anon, authenticated;
 grant execute on function public.dbmerge_start_job(text, int, int, int, int, int, jsonb) to anon, authenticated;
 grant execute on function public.dbmerge_get_jobs(text)                                   to anon, authenticated;
+grant execute on function public.dbmerge_book_find(text, jsonb)                           to anon, authenticated;
+grant execute on function public.dbmerge_book_save(text, uuid, text, jsonb)               to anon, authenticated;
+grant execute on function public.dbmerge_book_delete_rows(text, jsonb)                    to anon, authenticated;

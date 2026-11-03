@@ -131,6 +131,62 @@ select test.ok(dbmerge_purge_expired() = 0, '영구 보관 계정은 삭제 안 
 set role anon;
 select test.ok((dbmerge_me(:'t_dev2') -> 'retention_hours') = 'null'::jsonb, '영구로 바꾸면 내 정보에 null');
 
+-- ── 주소록 정리 (DB 비교·DB 정리·중복 삭제) ─────────────────────
+select test.err(format($$select dbmerge_book_find(%L, '[]')$$, :'t_old2'), 'DB 저장 권한', '권한 없는 계정은 주소록 정리 불가');
+select test.err($$select _dbmerge_store_auth('x')$$, 'permission denied', '권한 확인 내부 함수 호출 차단');
+
+select ((dbmerge_me(:'t_dev2') ->> 'used')::int) as used0 \gset
+select dbmerge_book_save(:'t_dev2', null, '1차.xlsx',
+  '[{"fixed_phone":"010-2000-0001","name":"홍길동","grp":""},
+    {"fixed_phone":"010-2000-0002","name":"김철수"},
+    {"fixed_phone":"010-2000-0001","name":"같은파일중복"},
+    {"fixed_phone":"","name":"빈번호"}]') as save1 \gset
+select test.ok((:'save1'::jsonb ->> 'inserted')::int = 2 and (:'save1'::jsonb ->> 'filled')::int = 0, '신규 2건 저장 (같은 번호·빈 번호 제외)');
+select test.ok((dbmerge_me(:'t_dev2') ->> 'used')::int = :used0 + 2, '신규 건수만큼 차감');
+select (:'save1'::jsonb ->> 'book_id') as book1 \gset
+
+select test.ok(jsonb_array_length(dbmerge_book_find(:'t_dev2', '["010-2000-0001","010-2000-0002","010-2000-0003"]')) = 2, 'DB에 있는 번호만 찾음');
+
+select dbmerge_book_save(:'t_dev2', :'book1', '1차.xlsx',
+  '[{"fixed_phone":"010-2000-0001","name":"다른이름","grp":"서울"},
+    {"fixed_phone":"010-2000-0003","name":"이영희"}]') as save2 \gset
+select test.ok((:'save2'::jsonb ->> 'inserted')::int = 1 and (:'save2'::jsonb ->> 'filled')::int = 1, '나눠 저장: 신규 1건 + 기존 1건 빈 칸 채움');
+select test.ok((select r ->> 'name' = '홍길동' and r ->> 'grp' = '서울'
+                from jsonb_array_elements(dbmerge_book_find(:'t_dev2', '["010-2000-0001"]')) r), '기존 값은 유지하고 빈 칸만 채움');
+select test.ok((dbmerge_me(:'t_dev2') ->> 'used')::int = :used0 + 3, '기존 번호는 차감 안 함');
+
+select dbmerge_book_save(:'t_dev2', null, '2차.xlsx', '[{"fixed_phone":"010-2000-0001"},{"fixed_phone":"010-2000-0002"}]') as save3 \gset
+select test.ok((:'save3'::jsonb ->> 'inserted')::int = 0 and (dbmerge_me(:'t_dev2') ->> 'used')::int = :used0 + 3, '모두 기존 번호면 차감 0건');
+
+select test.ok((select unique_count = 3 and total = 4 and kind = 'book' and file_names = array['1차.xlsx']
+                from dbmerge_get_jobs(:'t_dev2') where kind = 'book' order by created_at limit 1), '사용 이력에 DB 정리(누적 3건) 기록');
+
+select test.err(format($$select dbmerge_book_save(%L, '00000000-0000-0000-0000-0000000000b3', 'x', '[]')$$, :'t_dev2'),
+                '찾을 수 없습니다', '남의 묶음에 이어서 저장 불가');
+select test.err(format($$select dbmerge_book_find(%L, %L)$$, :'t_dev2', (select jsonb_agg(g::text) from generate_series(1, 1001) g)),
+                '1000개까지', '한 번에 1000개 넘게 조회 불가');
+
+reset role;
+update dbmerge_licenses set quota = used + 1 where phone = '01022223333';
+set role anon;
+select test.err(format($$select dbmerge_book_save(%L, null, '3차.xlsx', '[{"fixed_phone":"010-2000-0008"},{"fixed_phone":"010-2000-0009"}]')$$, :'t_dev2'),
+                '잔여 건수가 부족', '잔여 건수보다 신규가 많으면 거부');
+select test.ok(jsonb_array_length(dbmerge_book_find(:'t_dev2', '["010-2000-0008","010-2000-0009"]')) = 0, '거부되면 아무것도 저장 안 됨');
+
+reset role;
+select r.id as admin_row from dbmerge_book_rows r join dbmerge_licenses l on l.id::text = r.license_id where l.phone = '01099990000' limit 1 \gset
+set role anon;
+select (dbmerge_book_find(:'t_dev2', '["010-2000-0002"]') -> 0 ->> 'row_id') as my_row \gset
+select test.ok(dbmerge_book_delete_rows(:'t_dev2', format('[%s,%s]', :'my_row', :'admin_row')::jsonb) = 1, '내 행만 삭제 (남의 행 id는 무시)');
+select test.ok(jsonb_array_length(dbmerge_book_find(:'t_dev2', '["010-2000-0002"]')) = 0, '삭제한 행은 더 이상 안 보임');
+reset role;
+select test.ok((select count(*) from dbmerge_book_rows where id = :admin_row) = 1, '다른 계정 행은 그대로');
+select test.ok((select row_count from dbmerge_books where id = :'book1') = 2, '묶음 건수도 줄어듦');
+set role anon;
+
+select dbmerge_book_save(:'t_admin', null, '관리자2.xlsx', '[{"fixed_phone":"010-3000-0001"}]') as save_a \gset
+select test.ok((:'save_a'::jsonb ->> 'inserted')::int = 1 and (dbmerge_me(:'t_admin') ->> 'used')::int = 0, '슈퍼어드민은 권한 설정 없이 저장, 차감 없음');
+
 -- ── 차단·로그아웃 ─────────────────────────────────────────────
 reset role;
 update dbmerge_licenses set status = 'blocked' where phone = '01011112222';
